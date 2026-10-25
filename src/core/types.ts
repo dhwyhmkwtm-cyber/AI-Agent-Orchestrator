@@ -25,7 +25,8 @@ export type ApprovalKind =
   | 'plan' // 計画(タスク分解・役割分担)の承認
   | 'task_gate' // 外部公開・費用発生を伴うタスク成果の承認
   | 'quality_escalation' // 修正上限に達しても品質基準を満たせなかった
-  | 'budget' // 予算超過
+  | 'budget' // プロジェクト予算の超過
+  | 'business_budget' // 事業の月予算の超過
   | 'tool'; // エージェントが実行しようとした危険なツール操作
 
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
@@ -45,6 +46,19 @@ export interface ApprovalRequest {
   decidedAt?: string;
 }
 
+/** 事業。複数のプロジェクトをまとめ、既定のチームと月予算を持つ。 */
+export interface Business {
+  id: string;
+  name: string;
+  description: string;
+  /** この事業で新しいプロジェクトを作るときの既定のチーム。 */
+  team: RoleId[];
+  /** 事業全体の月予算(USD)。null は上限なし。 */
+  monthlyBudgetUsd: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type ProjectStatus =
   | 'planning'
   | 'awaiting_plan_approval'
@@ -57,6 +71,7 @@ export interface Project {
   id: string;
   name: string;
   goal: string;
+  businessId?: string;
   /** このプロジェクトで使える役割。計画者はこの中から担当を選ぶ。 */
   team: RoleId[];
   status: ProjectStatus;
@@ -64,6 +79,10 @@ export interface Project {
   /** 予算超過の承認1回あたりに追加する額。 */
   budgetStepUsd: number;
   spentUsd: number;
+  /** 月ごとの費用('YYYY-MM' → USD)。事業の月予算の集計に使う。 */
+  spendByMonth: Record<string, number>;
+  /** 事業の月予算を超えて続行することを人間が承認した月。 */
+  overBudgetMonth?: string;
   planRationale?: string;
   /** 計画が却下されたときの人間のコメント。再計画時に渡す。 */
   planFeedback?: string;
@@ -142,6 +161,7 @@ export interface LogEvent {
 }
 
 export interface State {
+  businesses: Business[];
   projects: Project[];
   tasks: Task[];
   approvals: ApprovalRequest[];

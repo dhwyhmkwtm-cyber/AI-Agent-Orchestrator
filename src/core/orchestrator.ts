@@ -12,8 +12,8 @@ import {
   reviewPrompt,
   roleSystemPrompt,
 } from './prompts.ts';
-import { newId, now, type Store } from './store.ts';
-import type { ApprovalCategory, ApprovalRequest, Attempt, Project, Review, RoleDefinition, Task } from './types.ts';
+import { monthKey, newId, now, type Store } from './store.ts';
+import type { ApprovalCategory, ApprovalRequest, Attempt, Business, Project, Review, RoleDefinition, Task } from './types.ts';
 
 export interface OrchestratorOptions {
   store: Store;
@@ -35,8 +35,17 @@ export interface OrchestratorOptions {
 export interface CreateProjectInput {
   name: string;
   goal: string;
+  businessId?: string;
+  /** 省略すると事業の既定チーム(事業もなければ全役割)を使う。 */
   team?: string[];
   budgetUsd?: number;
+}
+
+export interface BusinessInput {
+  name: string;
+  description?: string;
+  team?: string[];
+  monthlyBudgetUsd?: number | null;
 }
 
 const REQUIRED_ROLES = ['director', 'qa_reviewer'];
@@ -85,18 +94,60 @@ export class Orchestrator {
     while (this.inflight.size) await new Promise((r) => setTimeout(r, 5));
   }
 
+  createBusiness(input: BusinessInput): Business {
+    const business: Business = {
+      id: newId(),
+      name: '',
+      description: '',
+      team: [...REQUIRED_ROLES],
+      monthlyBudgetUsd: null,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    this.applyBusinessInput(business, input);
+    this.store.state.businesses.push(business);
+    this.store.changed();
+    return business;
+  }
+
+  updateBusiness(id: string, input: Partial<BusinessInput>): Business {
+    const business = this.business(id);
+    this.applyBusinessInput(business, { ...business, ...input });
+    business.updatedAt = now();
+    this.store.changed();
+    return business;
+  }
+
+  private applyBusinessInput(business: Business, input: BusinessInput): void {
+    if (!input.name?.trim()) throw new Error('name is required');
+    const budget = input.monthlyBudgetUsd;
+    if (budget !== null && budget !== undefined && !(budget > 0)) throw new Error('monthlyBudgetUsd must be positive');
+    business.name = input.name.trim();
+    business.description = input.description?.trim() ?? '';
+    business.team = this.resolveTeam(input.team?.length ? input.team : this.roles.map((r) => r.id));
+    business.monthlyBudgetUsd = budget ?? null;
+  }
+
+  /** 事業の今月の費用。 */
+  businessMonthSpend(businessId: string, month = monthKey()): number {
+    return this.store.state.projects
+      .filter((p) => p.businessId === businessId)
+      .reduce((sum, p) => sum + (p.spendByMonth[month] ?? 0), 0);
+  }
+
   createProject(input: CreateProjectInput): Project {
-    const known = new Set(this.roles.map((r) => r.id));
-    const requested = input.team?.length ? input.team : [...known];
-    const unknown = requested.filter((id) => !known.has(id));
-    if (unknown.length) throw new Error(`unknown roles: ${unknown.join(', ')}`);
     if (!input.name?.trim() || !input.goal?.trim()) throw new Error('name and goal are required');
+    const business = input.businessId ? this.business(input.businessId) : undefined;
+    const requested = input.team?.length ? input.team : business?.team ?? this.roles.map((r) => r.id);
     const budget = input.budgetUsd ?? 10;
+    if (!(budget > 0)) throw new Error('budgetUsd must be positive');
     const project: Project = {
       id: newId(),
       name: input.name.trim(),
       goal: input.goal.trim(),
-      team: [...new Set([...REQUIRED_ROLES, ...requested])],
+      businessId: business?.id,
+      team: this.resolveTeam(requested),
+      spendByMonth: {},
       status: 'planning',
       budgetUsd: budget,
       budgetStepUsd: budget,
@@ -110,6 +161,14 @@ export class Orchestrator {
     this.store.changed();
     this.tick();
     return project;
+  }
+
+  /** 役割IDを検証し、必須の役割を加える。 */
+  private resolveTeam(ids: string[]): string[] {
+    const known = new Set(this.roles.map((r) => r.id));
+    const unknown = ids.filter((id) => !known.has(id));
+    if (unknown.length) throw new Error(`unknown roles: ${unknown.join(', ')}`);
+    return [...new Set([...REQUIRED_ROLES, ...ids])];
   }
 
   /** 失敗したプロジェクトを、失敗した箇所からやり直す。 */
@@ -348,8 +407,10 @@ export class Orchestrator {
         if (task) this.setTaskStatus(task, approved ? 'done' : 'failed');
         break;
       case 'budget':
+      case 'business_budget':
         if (approved) {
-          project.budgetUsd = project.spentUsd + project.budgetStepUsd;
+          if (a.kind === 'budget') project.budgetUsd = project.spentUsd + project.budgetStepUsd;
+          else project.overBudgetMonth = monthKey();
           const hasTasks = this.tasksOf(project).length > 0;
           this.setProjectStatus(project, hasTasks ? 'running' : 'planning');
         }
@@ -390,6 +451,8 @@ export class Orchestrator {
     };
     const result = await provider.run(req);
     project.spentUsd += result.costUsd;
+    const month = monthKey();
+    project.spendByMonth[month] = (project.spendByMonth[month] ?? 0) + result.costUsd;
     this.store.log({
       projectId: project.id,
       taskId: task?.id,
@@ -404,18 +467,27 @@ export class Orchestrator {
 
   /** 予算内なら true。超えていれば一時停止して追加予算の承認を求める。 */
   private ensureBudget(project: Project): boolean {
-    if (project.spentUsd < project.budgetUsd) return true;
+    if (project.spentUsd >= project.budgetUsd) {
+      return this.pauseForBudget(project, 'budget', `予算超過: ${project.name}`,
+        `使用額 $${project.spentUsd.toFixed(2)} が予算 $${project.budgetUsd.toFixed(2)} に達しました。承認すると $${project.budgetStepUsd.toFixed(2)} を追加して続行します。`);
+    }
+    const business = project.businessId ? this.store.state.businesses.find((b) => b.id === project.businessId) : undefined;
+    const month = monthKey();
+    if (business?.monthlyBudgetUsd && project.overBudgetMonth !== month) {
+      const spent = this.businessMonthSpend(business.id, month);
+      if (spent >= business.monthlyBudgetUsd) {
+        return this.pauseForBudget(project, 'business_budget', `月予算超過: ${business.name}`,
+          `事業「${business.name}」の今月の費用 $${spent.toFixed(2)} が月予算 $${business.monthlyBudgetUsd.toFixed(2)} に達しました。承認すると、プロジェクト「${project.name}」は今月に限り月予算を超えて続行します。`);
+      }
+    }
+    return true;
+  }
+
+  /** 一時停止して予算の承認を求める。常に false を返す。 */
+  private pauseForBudget(project: Project, kind: 'budget' | 'business_budget', title: string, detail: string): false {
     if (project.status !== 'paused') this.setProjectStatus(project, 'paused');
-    const asked = this.approvals.pending(project.id).some((a) => a.kind === 'budget');
-    if (!asked) {
-      this.approvals.request({
-        projectId: project.id,
-        kind: 'budget',
-        category: 'cost',
-        title: `予算超過: ${project.name}`,
-        detail: `使用額 $${project.spentUsd.toFixed(2)} が予算 $${project.budgetUsd.toFixed(2)} に達しました。承認すると $${project.budgetStepUsd.toFixed(2)} を追加して続行します。`,
-        requestedBy: 'system',
-      });
+    if (!this.approvals.pending(project.id).some((a) => a.kind === kind)) {
+      this.approvals.request({ projectId: project.id, kind, category: 'cost', title, detail, requestedBy: 'system' });
     }
     return false;
   }
@@ -445,6 +517,12 @@ export class Orchestrator {
 
   private workspace(project: Project): string {
     return join(this.opts.workspaceRoot, project.id);
+  }
+
+  private business(id: string): Business {
+    const business = this.store.state.businesses.find((b) => b.id === id);
+    if (!business) throw new Error(`business not found: ${id}`);
+    return business;
   }
 
   private project(id: string): Project {

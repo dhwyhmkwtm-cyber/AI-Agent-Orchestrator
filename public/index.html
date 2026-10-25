@@ -11,9 +11,10 @@
 </head>
 <body>
   <header class="topbar">
-    <h1>AI Agent Orchestrator</h1>
+    <h1><button id="overviewBtn" class="linklike">AI Agent Orchestrator</button></h1>
     <span id="conn" class="conn" title="接続状態">●</span>
-    <button id="newProjectBtn" class="btn primary">＋ 新規プロジェクト</button>
+    <button id="newBusinessBtn" class="btn">＋ 事業</button>
+    <button id="newProjectBtn" class="btn primary">＋ プロジェクト</button>
   </header>
 
   <main class="layout">
@@ -28,9 +29,7 @@
       </section>
     </aside>
 
-    <section id="detail" class="detail">
-      <p class="empty">プロジェクトを選択するか、新規作成してください。</p>
-    </section>
+    <section id="detail" class="detail"></section>
   </main>
 
   <div id="login" class="overlay" hidden>
@@ -43,6 +42,7 @@
   <dialog id="newProject" class="dialog">
     <form id="newProjectForm" method="dialog">
       <h2>新規プロジェクト</h2>
+      <label>事業<select name="businessId" id="projectBusiness"></select></label>
       <label>名前<input name="name" required maxlength="100"></label>
       <label>目的・依頼内容<textarea name="goal" required rows="5" placeholder="例: 30代向けの手軽な朝食サブスクを企画し、LPを作る"></textarea></label>
       <label>予算 (USD)<input name="budgetUsd" type="number" min="0.5" step="0.5" value="10"></label>
@@ -54,6 +54,25 @@
       <div class="row end">
         <button type="button" class="btn" data-close>キャンセル</button>
         <button type="submit" class="btn primary">作成して計画開始</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="businessDialog" class="dialog">
+    <form id="businessForm" method="dialog">
+      <h2 id="businessDialogTitle">新規事業</h2>
+      <input type="hidden" name="id">
+      <label>事業名<input name="name" required maxlength="100"></label>
+      <label>説明<textarea name="description" rows="3" placeholder="例: 共働き世帯向けの食品サブスク事業"></textarea></label>
+      <label>月予算 (USD・空欄なら上限なし)<input name="monthlyBudgetUsd" type="number" min="0.5" step="0.5"></label>
+      <fieldset>
+        <legend>既定のチーム(新しいプロジェクトに引き継がれます)</legend>
+        <div id="businessTeamChoices" class="choices"></div>
+      </fieldset>
+      <p id="businessError" class="error" hidden></p>
+      <div class="row end">
+        <button type="button" class="btn" data-close>キャンセル</button>
+        <button type="submit" class="btn primary">保存</button>
       </div>
     </form>
   </dialog>

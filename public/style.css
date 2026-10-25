@@ -148,3 +148,15 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: grid; place-items: center; z-index: 10; }
 .overlay[hidden] { display: none; }
 pre.file { max-height: 70vh; overflow: auto; white-space: pre-wrap; background: var(--bg); padding: 12px; border-radius: 8px; }
+
+.linklike { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+.summary { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.stat { font-size: 1.6rem; font-weight: 700; line-height: 1.2; }
+.businesses { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.counts { display: flex; flex-wrap: wrap; gap: .4rem; }
+.plist { display: flex; flex-direction: column; gap: 2px; }
+.plist button { display: flex; justify-content: space-between; gap: .5rem; align-items: center; min-height: 40px; width: 100%;
+  padding: 4px 8px; border-radius: 8px; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.plist button:hover, .plist button:focus-visible { background: var(--chip-bg); }
+.group-title { font-size: .8rem; color: var(--muted); margin: .4rem 0 0; }
+select { appearance: auto; }

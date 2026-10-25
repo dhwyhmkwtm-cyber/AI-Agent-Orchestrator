@@ -3,8 +3,8 @@ import { createReadStream, existsSync, readdirSync, readFileSync, realpathSync, 
 import { extname, join, relative, resolve, sep } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import type { Approvals } from '../core/approvals.ts';
-import type { Orchestrator } from '../core/orchestrator.ts';
-import type { Store } from '../core/store.ts';
+import type { BusinessInput, Orchestrator } from '../core/orchestrator.ts';
+import { monthKey, type Store } from '../core/store.ts';
 
 export interface ServerOptions {
   store: Store;
@@ -71,6 +71,18 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   }
 }
 
+/** リクエストの本文から、指定された項目だけを事業の入力にする。 */
+function businessInput(body: Record<string, unknown>): Partial<BusinessInput> {
+  const input: Partial<BusinessInput> = {};
+  if (body.name !== undefined) input.name = String(body.name);
+  if (body.description !== undefined) input.description = String(body.description);
+  if (Array.isArray(body.team)) input.team = body.team.map(String);
+  if (body.monthlyBudgetUsd !== undefined) {
+    input.monthlyBudgetUsd = body.monthlyBudgetUsd === null || body.monthlyBudgetUsd === '' ? null : Number(body.monthlyBudgetUsd);
+  }
+  return input;
+}
+
 /** ワークスペース内のパスだけを解決する(シンボリックリンクでの脱出も防ぐ)。 */
 function resolveInside(root: string, rel: string): string {
   const base = realpathSync(root);
@@ -98,7 +110,9 @@ function listFiles(root: string, dir = root, out: Array<{ path: string; size: nu
  * - GET  /api/state                全体の状態
  * - GET  /api/events?projectId=…   作業ログ
  * - GET  /api/stream               状態変化とログのSSE
- * - POST /api/projects             プロジェクト作成
+ * - POST /api/businesses           事業の作成 {name, description?, team?, monthlyBudgetUsd?}
+ * - POST /api/businesses/:id       事業の更新(同じ項目、指定したものだけ)
+ * - POST /api/projects             プロジェクト作成 {name, goal, businessId?, team?, budgetUsd?}
  * - POST /api/projects/:id/retry   失敗したプロジェクトの再開
  * - POST /api/approvals/:id        承認・却下 {approve: boolean, comment?}
  * - GET  /api/projects/:id/files[?path=…]  成果物の一覧・内容
@@ -131,7 +145,7 @@ export function createDashboardServer(opts: ServerOptions): Server {
     if (!authorized(req)) throw new HttpError(401, 'unauthorized');
 
     if (method === 'GET' && pathname === '/api/state') {
-      return json(res, 200, { ...store.state, roles: orchestrator.roles });
+      return json(res, 200, { ...store.state, roles: orchestrator.roles, month: monthKey() });
     }
     if (method === 'GET' && pathname === '/api/events') {
       return json(res, 200, store.recentEvents(url.searchParams.get('projectId') ?? undefined));
@@ -157,6 +171,7 @@ export function createDashboardServer(opts: ServerOptions): Server {
         const project = orchestrator.createProject({
           name: String(body.name ?? ''),
           goal: String(body.goal ?? ''),
+          businessId: body.businessId ? String(body.businessId) : undefined,
           team: Array.isArray(body.team) ? body.team.map(String) : undefined,
           budgetUsd: body.budgetUsd === undefined ? undefined : Number(body.budgetUsd),
         });
@@ -166,7 +181,26 @@ export function createDashboardServer(opts: ServerOptions): Server {
       }
     }
 
-    let m = /^\/api\/projects\/([\w-]+)\/retry$/.exec(pathname);
+    if (method === 'POST' && pathname === '/api/businesses') {
+      const input = businessInput(await readJson(req));
+      try {
+        return json(res, 201, orchestrator.createBusiness({ name: '', ...input }));
+      } catch (err) {
+        throw new HttpError(400, (err as Error).message);
+      }
+    }
+
+    let m = /^\/api\/businesses\/([\w-]+)$/.exec(pathname);
+    if (method === 'POST' && m) {
+      const input = businessInput(await readJson(req));
+      try {
+        return json(res, 200, orchestrator.updateBusiness(m[1], input));
+      } catch (err) {
+        throw new HttpError((err as Error).message.startsWith('business not found') ? 404 : 400, (err as Error).message);
+      }
+    }
+
+    m = /^\/api\/projects\/([\w-]+)\/retry$/.exec(pathname);
     if (method === 'POST' && m) {
       try {
         orchestrator.retry(m[1]);

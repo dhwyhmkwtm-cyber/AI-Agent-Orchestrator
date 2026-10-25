@@ -175,3 +175,45 @@ test('レビュー担当は上限の人数までに絞られる', async () => {
   await waitFor(() => !!pendingOf(approvals, 'plan'), 'plan');
   assert.deepEqual(store.state.tasks[0].reviewers, ['qa_reviewer']);
 });
+
+test('事業の既定チームがプロジェクトに引き継がれ、事業ごとに今月の費用が集計される', async () => {
+  const { store, approvals, orchestrator } = setup();
+  const biz = orchestrator.createBusiness({ name: '朝食事業', team: ['copywriter'] });
+  assert.deepEqual(biz.team, ['director', 'qa_reviewer', 'copywriter']);
+  const project = orchestrator.createProject({ name: 'p', goal: 'g', businessId: biz.id });
+  assert.equal(project.businessId, biz.id);
+  assert.deepEqual(project.team, biz.team);
+  assert.throws(() => orchestrator.createProject({ name: 'p', goal: 'g', businessId: 'nope' }), /business not found/);
+
+  await waitFor(() => !!pendingOf(approvals, 'plan'), 'plan');
+  assert.ok(orchestrator.businessMonthSpend(biz.id) > 0, '計画の費用が事業の今月分に入る');
+  assert.equal(orchestrator.businessMonthSpend(biz.id), project.spentUsd);
+  assert.equal(store.state.businesses.length, 1);
+});
+
+test('事業の月予算に達したら止まり、承認すると今月に限り続行する', async () => {
+  const { approvals, orchestrator } = setup();
+  const biz = orchestrator.createBusiness({ name: 'b', monthlyBudgetUsd: 0.02 });
+  const project = orchestrator.createProject({ name: 'p', goal: 'g', businessId: biz.id, budgetUsd: 100 });
+  await waitFor(() => !!pendingOf(approvals, 'plan'), 'plan');
+  approvals.decide(pendingOf(approvals, 'plan')!.id, true);
+  await waitFor(() => !!pendingOf(approvals, 'business_budget'), 'business budget approval');
+  await orchestrator.idle();
+  assert.equal(project.status, 'paused');
+  assert.equal(pendingOf(approvals, 'budget'), undefined, 'プロジェクト予算には達していない');
+
+  approvals.decide(pendingOf(approvals, 'business_budget')!.id, true);
+  assert.equal(project.status, 'running');
+  assert.ok(project.overBudgetMonth);
+  await waitFor(() => !!pendingOf(approvals, 'task_gate') || project.status === 'done', 'continues past monthly budget');
+});
+
+test('事業の更新では指定した項目だけが変わる', () => {
+  const { orchestrator } = setup();
+  const biz = orchestrator.createBusiness({ name: 'b', description: 'd', monthlyBudgetUsd: 5 });
+  orchestrator.updateBusiness(biz.id, { monthlyBudgetUsd: null });
+  assert.equal(biz.monthlyBudgetUsd, null);
+  assert.equal(biz.description, 'd');
+  assert.throws(() => orchestrator.updateBusiness(biz.id, { name: ' ' }), /name is required/);
+  assert.throws(() => orchestrator.createBusiness({ name: 'x', monthlyBudgetUsd: -1 }), /positive/);
+});
