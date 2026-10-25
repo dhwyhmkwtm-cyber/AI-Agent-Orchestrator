@@ -44,6 +44,8 @@ const APPROVAL_HINT = {
 };
 
 const ui = { state: null, events: [], files: null, filesSig: '', selected: localGet('selectedProject'), showArchived: false, page: null };
+const ROLE_FIELD_LABEL = { name: '名前', mission: '使命', criteria: '判断基準', tools: 'ツール', provider: 'AIサービス', model: 'モデル', effort: '思考レベル' };
+const ROLE_ACTION = { create: ['追加', 'run'], update: ['変更', ''], reset: ['初期値に戻す', 'warn'], delete: ['削除', 'bad'] };
 const EFFORT_LABEL = { low: '低', medium: '中', high: '高', xhigh: 'とても高い', max: '最大' };
 
 function localGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
@@ -190,10 +192,45 @@ function renderRoles(s, box) {
     h('div', { class: 'card stack' },
       h('div', { class: 'row between' },
         h('button', { class: 'btn', onclick: () => select(null) }, '← 全体'),
-        h('button', { class: 'btn primary', onclick: () => openRole() }, '＋ 役割を追加')),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn', onclick: () => document.getElementById('roleHistory')?.scrollIntoView({ behavior: 'smooth' }) }, `変更履歴 (${s.roleHistory.length})`),
+          h('button', { class: 'btn primary', onclick: () => openRole() }, '＋ 役割を追加'))),
       h('h2', {}, '役割と判断基準'),
       h('p', { class: 'meta' }, '変更は次の作業から反映されます(作業中のAIには影響しません)。外部公開・費用・危険なコマンドの承認ルールは、役割の設定に関係なく常に有効です。')),
-    h('div', { class: 'roles' }, ...cards));
+    h('div', { class: 'roles' }, ...cards),
+    roleHistoryView(s));
+}
+
+function roleHistoryView(s) {
+  const modelLabel = (id) => (id ? s.choices.models.find((m) => m.id === id)?.label ?? id : '既定');
+  const show = (field, v) => {
+    if (field === 'model') return modelLabel(v);
+    if (field === 'effort') return v ? EFFORT_LABEL[v] : '既定';
+    return v || '(なし)';
+  };
+  const change = (c) => {
+    if (c.field === 'criteria') {
+      const before = c.before ? c.before.split('\n') : [];
+      const after = c.after ? c.after.split('\n') : [];
+      return h('div', {}, h('strong', {}, '判断基準'),
+        h('ul', { class: 'tight' },
+          ...before.filter((x) => !after.includes(x)).map((x) => h('li', { class: 'diff-del' }, `− ${x}`)),
+          ...after.filter((x) => !before.includes(x)).map((x) => h('li', { class: 'diff-add' }, `＋ ${x}`))));
+    }
+    return h('div', {}, h('strong', {}, ROLE_FIELD_LABEL[c.field] ?? c.field), `: ${show(c.field, c.before)} → ${show(c.field, c.after)}`);
+  };
+  const entries = [...s.roleHistory].reverse().slice(0, 100);
+  return h('div', { class: 'card stack', id: 'roleHistory' },
+    h('h2', {}, '変更履歴'),
+    entries.length
+      ? h('div', { class: 'stack' }, ...entries.map((e) => h('div', { class: 'review' },
+          h('div', { class: 'row' },
+            chip(ROLE_ACTION[e.action]),
+            h('strong', {}, e.roleName),
+            h('span', { class: 'meta' }, new Date(e.at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }))),
+          e.action === 'update' || e.action === 'reset' ? e.changes.map(change) : null)))
+      : h('p', { class: 'empty' }, 'まだ変更はありません'),
+    s.roleHistory.length > 100 && h('p', { class: 'meta' }, `新しい100件を表示しています(全${s.roleHistory.length}件)`));
 }
 
 function kpiView(k) {

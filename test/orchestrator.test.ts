@@ -330,3 +330,33 @@ test('月予算の承認は事業単位で、同じ事業の承認待ちをま�
   assert.equal(p2.status, 'running');
   assert.equal(p3.status, 'paused');
 });
+
+test('役割の変更は差分つきで履歴に残る', () => {
+  const { store, orchestrator } = setup();
+  const base = orchestrator.roles.find((r) => r.id === 'copywriter')!;
+  const input = { name: base.name, mission: base.mission, criteria: [...base.criteria], tools: [...base.tools], provider: 'mock' };
+  orchestrator.updateRole('copywriter', { ...input, provider: base.provider });
+  assert.equal(store.state.roleHistory.length, 0, '何も変えていない保存は残さない');
+
+  orchestrator.updateRole('copywriter', { ...input, provider: base.provider, criteria: [...base.criteria, '景品表示法を守る'], model: 'claude-sonnet-5-5' });
+  const [h1] = store.state.roleHistory;
+  assert.equal(h1.action, 'update');
+  assert.deepEqual(h1.changes.map((c) => c.field), ['criteria', 'model']);
+  assert.match(h1.changes[0].after, /景品表示法を守る/);
+  assert.equal(h1.changes[1].before, '');
+
+  orchestrator.resetRole('copywriter');
+  assert.equal(store.state.roleHistory[1].action, 'reset');
+  assert.deepEqual(store.state.roleHistory[1].changes.map((c) => c.field), ['criteria', 'model']);
+
+  const custom = orchestrator.createRole({ ...input, name: 'SNS運用' });
+  orchestrator.deleteRole(custom.id);
+  assert.deepEqual(store.state.roleHistory.slice(2).map((h) => [h.action, h.roleName]), [['create', 'SNS運用'], ['delete', 'SNS運用']]);
+});
+
+test('ツールの並び順だけの違いは変更として残らない', () => {
+  const { store, orchestrator } = setup();
+  const r = orchestrator.roles.find((x) => x.id === 'copywriter')!;
+  orchestrator.updateRole('copywriter', { name: r.name, mission: r.mission, criteria: [...r.criteria], tools: [...r.tools].reverse(), provider: r.provider });
+  assert.equal(store.state.roleHistory.length, 0);
+});

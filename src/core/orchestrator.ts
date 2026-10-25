@@ -13,7 +13,7 @@ import {
   roleSystemPrompt,
 } from './prompts.ts';
 import { monthKey, newId, now, type Store } from './store.ts';
-import type { ApprovalCategory, ApprovalRequest, Attempt, Business, Effort, Kpi, Project, Review, RoleDefinition, Task } from './types.ts';
+import type { ApprovalCategory, ApprovalRequest, Attempt, Business, Effort, Kpi, Project, Review, RoleChange, RoleDefinition, Task } from './types.ts';
 import { EFFORT_CHOICES, MODEL_CHOICES, TOOL_CHOICES } from '../roles/catalog.ts';
 
 export interface OrchestratorOptions {
@@ -72,6 +72,24 @@ export interface BusinessInput {
 }
 
 const REQUIRED_ROLES = ['director', 'qa_reviewer'];
+const ROLE_HISTORY_LIMIT = 1000;
+
+/** ツールを画面の選択肢の順に並べる(並び順の違いを変更とみなさないため)。 */
+const sortTools = (tools: string[]): string[] => {
+  const order = TOOL_CHOICES.map((t) => t.id);
+  return [...new Set(tools)].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+};
+
+/** 履歴に残す役割の項目と、その表示用の値。 */
+const ROLE_FIELDS: Array<[string, (r: RoleDefinition) => string]> = [
+  ['name', (r) => r.name],
+  ['mission', (r) => r.mission],
+  ['criteria', (r) => r.criteria.join('\n')],
+  ['tools', (r) => sortTools(r.tools).join(', ')],
+  ['provider', (r) => r.provider],
+  ['model', (r) => r.model ?? ''],
+  ['effort', (r) => r.effort ?? ''],
+];
 const PLAN_RETRIES = 2;
 
 interface PlannedTask {
@@ -129,6 +147,7 @@ export class Orchestrator {
     const role = { id: `custom_${newId()}` } as RoleDefinition;
     this.applyRoleInput(role, input);
     this.store.state.roles.push(role);
+    this.recordRoleChange('create', undefined, role);
     this.store.changed();
     return role;
   }
@@ -136,17 +155,35 @@ export class Orchestrator {
   /** 実行中の作業には影響せず、次の作業から使われる。 */
   updateRole(id: string, input: RoleInput): RoleDefinition {
     const role = this.role(id);
+    const before = structuredClone(role);
     this.applyRoleInput(role, input);
+    this.recordRoleChange('update', before, role);
     this.store.changed();
     return role;
+  }
+
+  /** 変更前後の差分を履歴に残す。update で差分がなければ何も残さない。 */
+  private recordRoleChange(action: RoleChange['action'], before: RoleDefinition | undefined, after: RoleDefinition | undefined): void {
+    const changes = ROLE_FIELDS.flatMap(([field, get]) => {
+      const b = before ? get(before) : '';
+      const a = after ? get(after) : '';
+      return b === a ? [] : [{ field, before: b, after: a }];
+    });
+    if (action === 'update' && !changes.length) return;
+    const role = (after ?? before)!;
+    const history = this.store.state.roleHistory;
+    history.push({ id: newId(), roleId: role.id, roleName: role.name, action, changes, at: now() });
+    if (history.length > ROLE_HISTORY_LIMIT) history.splice(0, history.length - ROLE_HISTORY_LIMIT);
   }
 
   resetRole(id: string): RoleDefinition {
     const role = this.role(id);
     const def = this.opts.roles.find((r) => r.id === id);
     if (!role.builtin || !def) throw new Error('追加した役割は初期値に戻せません');
+    const before = structuredClone(role);
     for (const k of Object.keys(role)) delete (role as unknown as Record<string, unknown>)[k];
     Object.assign(role, structuredClone(def), { builtin: true, updatedAt: now() });
+    this.recordRoleChange('reset', before, role);
     this.store.changed();
     return role;
   }
@@ -161,6 +198,7 @@ export class Orchestrator {
     ];
     if (users.length) throw new Error(`${users.slice(0, 3).join('、')}${users.length > 3 ? ` ほか${users.length - 3}件` : ''}のチームで使われているため削除できません`);
     this.store.state.roles = this.store.state.roles.filter((r) => r.id !== id);
+    this.recordRoleChange('delete', role, undefined);
     this.store.changed();
   }
 
@@ -174,13 +212,16 @@ export class Orchestrator {
     const knownTools = new Set(TOOL_CHOICES.map((t) => t.id));
     const badTool = input.tools.find((t) => !knownTools.has(t));
     if (badTool) throw new Error(`使えないツールです: ${badTool}`);
-    if (!this.opts.providers.ids().includes(input.provider)) throw new Error(`登録されていないAIサービスです: ${input.provider}`);
+    // 設定から外れたAIサービスでも、変えずに保存するだけなら許す
+    if (input.provider !== role.provider && !this.opts.providers.ids().includes(input.provider)) {
+      throw new Error(`登録されていないAIサービスです: ${input.provider}`);
+    }
     if (input.model && !MODEL_CHOICES.some((m) => m.id === input.model)) throw new Error(`選べないモデルです: ${input.model}`);
     if (input.effort && !EFFORT_CHOICES.includes(input.effort)) throw new Error(`選べない思考レベルです: ${input.effort}`);
     role.name = name;
     role.mission = mission;
     role.criteria = criteria;
-    role.tools = [...new Set(input.tools)];
+    role.tools = sortTools(input.tools);
     role.provider = input.provider;
     role.model = input.model || undefined;
     role.effort = input.effort || undefined;

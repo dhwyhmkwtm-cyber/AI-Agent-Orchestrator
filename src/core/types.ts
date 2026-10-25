@@ -22,6 +22,17 @@ export interface RoleDefinition {
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+/** 役割の変更履歴の1件。値は表示用の文字列で残す。 */
+export interface RoleChange {
+  id: string;
+  roleId: RoleId;
+  /** 変更時点の役割名(削除後も読めるように残す)。 */
+  roleName: string;
+  action: 'create' | 'update' | 'reset' | 'delete';
+  changes: Array<{ field: string; before: string; after: string }>;
+  at: string;
+}
+
 /** 人間の最終承認が必要な操作の種類。 */
 export type ApprovalCategory = 'decision' | 'publish' | 'cost';
 
@@ -181,6 +192,7 @@ export interface LogEvent {
 
 export interface State {
   roles: RoleDefinition[];
+  roleHistory: RoleChange[];
   businesses: Business[];
   projects: Project[];
   tasks: Task[];
