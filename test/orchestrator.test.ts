@@ -153,10 +153,12 @@ test('validatePlan は不正な計画を検出する', () => {
     key, title: key, description: '', role, dependsOn, reviewers: ['qa_reviewer'],
     approval: { required: false, category: 'decision' as const, reason: '' },
   });
-  const team = ['director', 'qa_reviewer', 'researcher'];
+  const team = DEFAULT_ROLES.filter((r) => ['director', 'qa_reviewer', 'researcher'].includes(r.id));
   assert.equal(validatePlan([t('a', 'researcher'), t('b', 'researcher', ['a'])], team), undefined);
   assert.match(validatePlan([], team)!, /タスクが1つもありません/);
   assert.match(validatePlan([t('a', 'designer')], team)!, /チームにいません/);
   assert.match(validatePlan([t('a', 'researcher', ['zzz'])], team)!, /存在しません/);
   assert.match(validatePlan([t('a', 'researcher', ['b']), t('b', 'researcher', ['a'])], team)!, /循環/);
+  assert.match(validatePlan([t('a', 'director')], team)!, /ファイルを保存できません/);
+  assert.match(validatePlan([t('a', 'qa_reviewer')], team)!, /ファイルを保存できません/);
 });

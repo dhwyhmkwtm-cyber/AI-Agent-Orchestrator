@@ -172,7 +172,7 @@ export class Orchestrator {
         rationale: string;
         tasks: PlannedTask[];
       };
-      error = validatePlan(output.tasks, project.team);
+      error = validatePlan(output.tasks, team);
       if (error) {
         this.store.log({ projectId: project.id, agent: 'director', kind: 'error', message: `計画に不備: ${error}` });
         continue;
@@ -469,16 +469,22 @@ export class Orchestrator {
   }
 }
 
+export const canWriteFiles = (role: RoleDefinition): boolean => role.tools.includes('Write');
+
 /** 計画の整合性を検証する。問題があれば説明文を返す。 */
-export function validatePlan(tasks: PlannedTask[], team: string[]): string | undefined {
+export function validatePlan(tasks: PlannedTask[], teamRoles: RoleDefinition[]): string | undefined {
   if (!tasks.length) return 'タスクが1つもありません';
+  const team = teamRoles.map((r) => r.id);
   const keys = new Set<string>();
   for (const t of tasks) {
     if (keys.has(t.key)) return `key が重複しています: ${t.key}`;
     keys.add(t.key);
   }
   for (const t of tasks) {
-    if (!team.includes(t.role)) return `タスク ${t.key} の担当 ${t.role} はチームにいません`;
+    const role = teamRoles.find((r) => r.id === t.role);
+    if (!role) return `タスク ${t.key} の担当 ${t.role} はチームにいません`;
+    // 成果物はファイルで提出させるため、書き込めない役割には担当させない
+    if (!canWriteFiles(role)) return `タスク ${t.key} の担当 ${t.role} はファイルを保存できません。成果物を作るタスクは書き込みできる役割に割り当ててください`;
     const badReviewer = t.reviewers.find((r) => !team.includes(r));
     if (badReviewer) return `タスク ${t.key} のレビュアー ${badReviewer} はチームにいません`;
     const badDep = t.dependsOn.find((d) => !keys.has(d));
