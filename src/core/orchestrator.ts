@@ -564,13 +564,13 @@ export class Orchestrator {
         if (task) this.setTaskStatus(task, approved ? 'done' : 'failed');
         break;
       case 'budget':
-      case 'business_budget':
         if (approved) {
-          if (a.kind === 'budget') project.budgetUsd = project.spentUsd + project.budgetStepUsd;
-          else project.overBudgetMonth = monthKey();
-          const hasTasks = this.tasksOf(project).length > 0;
-          this.setProjectStatus(project, hasTasks ? 'running' : 'planning');
+          project.budgetUsd = project.spentUsd + project.budgetStepUsd;
+          this.resumeAfterBudget(project);
         }
+        break;
+      case 'business_budget':
+        this.decideBusinessBudget(project, a);
         break;
       case 'tool':
         return; // 待っているエージェントが直接再開する
@@ -630,14 +630,35 @@ export class Orchestrator {
     }
     const business = project.businessId ? this.store.state.businesses.find((b) => b.id === project.businessId) : undefined;
     const month = monthKey();
-    if (business?.monthlyBudgetUsd && project.overBudgetMonth !== month) {
+    if (business?.monthlyBudgetUsd && business.overBudgetMonth !== month) {
       const spent = this.businessMonthSpend(business.id, month);
       if (spent >= business.monthlyBudgetUsd) {
         return this.pauseForBudget(project, 'business_budget', `月予算超過: ${business.name}`,
-          `事業「${business.name}」の今月の費用 $${spent.toFixed(2)} が月予算 $${business.monthlyBudgetUsd.toFixed(2)} に達しました。承認すると、プロジェクト「${project.name}」は今月に限り月予算を超えて続行します。`);
+          `事業「${business.name}」の今月の費用 $${spent.toFixed(2)} が月予算 $${business.monthlyBudgetUsd.toFixed(2)} に達しました。承認すると、この事業のプロジェクトはすべて今月に限り月予算を超えて続行します(同じ事業の承認待ちもまとめて片付きます)。`);
       }
     }
     return true;
+  }
+
+  private resumeAfterBudget(project: Project): void {
+    if (project.status !== 'paused') return;
+    this.setProjectStatus(project, this.tasksOf(project).length > 0 ? 'running' : 'planning');
+  }
+
+  /**
+   * 月予算の判断は事業単位。承認すると事業全体がその月は止まらなくなり、
+   * 同じ事業のほかの承認待ちも同じ判断でまとめて決裁する。
+   */
+  private decideBusinessBudget(project: Project, a: ApprovalRequest): void {
+    const business = this.store.state.businesses.find((b) => b.id === project.businessId);
+    const approved = a.status === 'approved';
+    if (business && approved) business.overBudgetMonth = monthKey();
+    const siblings = business ? this.store.state.projects.filter((p) => p.businessId === business.id) : [project];
+    for (const other of this.approvals.pending()) {
+      if (other.kind !== 'business_budget' || !siblings.some((p) => p.id === other.projectId)) continue;
+      this.approvals.decide(other.id, approved, `「${a.title}」の判断でまとめて${approved ? '承認' : '却下'}`);
+    }
+    if (approved) for (const p of siblings) this.resumeAfterBudget(p);
   }
 
   /** 一時停止して予算の承認を求める。常に false を返す。 */

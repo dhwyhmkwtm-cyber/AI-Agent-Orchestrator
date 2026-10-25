@@ -204,7 +204,7 @@ test('事業の月予算に達したら止まり、承認すると今月に限�
 
   approvals.decide(pendingOf(approvals, 'business_budget')!.id, true);
   assert.equal(project.status, 'running');
-  assert.ok(project.overBudgetMonth);
+  assert.ok(biz.overBudgetMonth);
   await waitFor(() => !!pendingOf(approvals, 'task_gate') || project.status === 'done', 'continues past monthly budget');
 });
 
@@ -307,4 +307,26 @@ test('役割の入力は検証される', () => {
   assert.throws(() => orchestrator.createRole({ ...ok, provider: 'nope' }), /AIサービス/);
   assert.throws(() => orchestrator.createRole({ ...ok, model: 'gpt-x' }), /モデル/);
   assert.throws(() => orchestrator.createRole({ ...ok, effort: 'turbo' as never }), /思考レベル/);
+});
+
+test('月予算の承認は事業単位で、同じ事業の承認待ちをまとめて片付ける', async () => {
+  const { approvals, orchestrator } = setup();
+  const biz = orchestrator.createBusiness({ name: 'b', monthlyBudgetUsd: 0.015 });
+  const other = orchestrator.createBusiness({ name: 'other', monthlyBudgetUsd: 0.015 });
+  const p1 = orchestrator.createProject({ name: 'p1', goal: 'g', businessId: biz.id });
+  const p2 = orchestrator.createProject({ name: 'p2', goal: 'g', businessId: biz.id });
+  const p3 = orchestrator.createProject({ name: 'p3', goal: 'g', businessId: other.id });
+  await waitFor(() => approvals.pending().filter((a) => a.kind === 'plan').length === 3, 'plans');
+  for (const a of approvals.pending()) approvals.decide(a.id, true);
+  await waitFor(() => approvals.pending().filter((a) => a.kind === 'business_budget').length === 3, 'three budget approvals');
+  await orchestrator.idle();
+  assert.deepEqual([p1, p2, p3].map((p) => p.status), ['paused', 'paused', 'paused']);
+
+  const forP1 = approvals.pending().find((a) => a.kind === 'business_budget' && a.projectId === p1.id)!;
+  approvals.decide(forP1.id, true);
+  const left = approvals.pending().filter((a) => a.kind === 'business_budget');
+  assert.deepEqual(left.map((a) => a.projectId), [p3.id], '同じ事業の p2 の承認待ちもまとめて承認され、別事業の p3 は残る');
+  assert.equal(p1.status, 'running');
+  assert.equal(p2.status, 'running');
+  assert.equal(p3.status, 'paused');
 });

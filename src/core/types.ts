@@ -72,6 +72,8 @@ export interface Business {
   monthlyBudgetUsd: number | null;
   /** 事業の成果指標。値は人間が入力する。 */
   kpis: Kpi[];
+  /** 月予算を超えて続行することを人間が承認した月('YYYY-MM')。その月は事業全体が止まらない。 */
+  overBudgetMonth?: string;
   /** アーカイブした日時。アーカイブ中は一覧に出さず、新しいプロジェクトも作れない。 */
   archivedAt?: string;
   createdAt: string;
@@ -100,8 +102,6 @@ export interface Project {
   spentUsd: number;
   /** 月ごとの費用('YYYY-MM' → USD)。事業の月予算の集計に使う。 */
   spendByMonth: Record<string, number>;
-  /** 事業の月予算を超えて続行することを人間が承認した月。 */
-  overBudgetMonth?: string;
   planRationale?: string;
   /** 計画が却下されたときの人間のコメント。再計画時に渡す。 */
   planFeedback?: string;
