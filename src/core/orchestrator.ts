@@ -13,7 +13,7 @@ import {
   roleSystemPrompt,
 } from './prompts.ts';
 import { monthKey, newId, now, type Store } from './store.ts';
-import type { ApprovalCategory, ApprovalRequest, Attempt, Business, Effort, Kpi, Project, Review, RoleChange, RoleDefinition, Task } from './types.ts';
+import type { ApprovalCategory, ApprovalRequest, Attempt, Business, Effort, Kpi, KpiSource, Project, Review, RoleChange, RoleDefinition, Task } from './types.ts';
 import { EFFORT_CHOICES, MODEL_CHOICES, TOOL_CHOICES } from '../roles/catalog.ts';
 
 export interface OrchestratorOptions {
@@ -60,6 +60,8 @@ export interface KpiInput {
   unit?: string;
   target?: number | null;
   current?: number | null;
+  /** null か省略で手入力。 */
+  source?: KpiSource | null;
 }
 
 export interface BusinessInput {
@@ -284,8 +286,35 @@ export class Orchestrator {
       target: num(input.target, 'target'),
       current: num(input.current, 'current'),
       updatedAt: prev?.updatedAt ?? now(),
+      source: input.source ? validateKpiSource(input.source) : undefined,
+      // 取り込み元を変えたら、前回の結果は意味がなくなる
+      sync: prev?.sync && JSON.stringify(prev.source) === JSON.stringify(input.source ?? undefined) ? prev.sync : undefined,
     };
     if (!prev || prev.current !== kpi.current || prev.target !== kpi.target) kpi.updatedAt = now();
+    return kpi;
+  }
+
+  /** 外部から取り込んだ値をKPIに反映する。kpiRef はKPIのIDか名前。 */
+  setKpiValue(businessId: string, kpiRef: string, value: number, via: 'url' | 'webhook'): Kpi {
+    if (!Number.isFinite(value)) throw new Error('value must be a number');
+    const kpi = this.kpi(businessId, kpiRef);
+    kpi.current = value;
+    kpi.updatedAt = now();
+    kpi.sync = { at: now(), ok: true, via };
+    this.store.changed();
+    return kpi;
+  }
+
+  recordKpiSyncError(businessId: string, kpiRef: string, error: string): void {
+    const kpi = this.kpi(businessId, kpiRef);
+    kpi.sync = { at: now(), ok: false, via: 'url', error: error.slice(0, 300) };
+    this.store.changed();
+  }
+
+  private kpi(businessId: string, kpiRef: string): Kpi {
+    const business = this.business(businessId);
+    const kpi = business.kpis.find((k) => k.id === kpiRef) ?? business.kpis.find((k) => k.name === kpiRef);
+    if (!kpi) throw new Error(`KPI not found: ${kpiRef}`);
     return kpi;
   }
 
@@ -778,6 +807,23 @@ export class Orchestrator {
 }
 
 export const canWriteFiles = (role: RoleDefinition): boolean => role.tools.includes('Write');
+
+export function validateKpiSource(s: KpiSource): KpiSource {
+  let url: URL;
+  try {
+    url = new URL(s.url);
+  } catch {
+    throw new Error('取得元URLが正しくありません');
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('取得元URLは http(s) で指定してください');
+  if (!['json', 'csv', 'text'].includes(s.format)) throw new Error('形式は json / csv / text のどれかです');
+  const path = (s.path ?? '').trim();
+  if (s.format !== 'text' && !path) throw new Error(s.format === 'json' ? 'JSONのパス(例 data.total)を入力してください' : 'セル番地(例 B2)を入力してください');
+  if (s.format === 'csv' && !/^[A-Z]+\d+$/i.test(path)) throw new Error('セル番地は B2 のように指定してください');
+  const interval = Math.round(Number(s.intervalMinutes));
+  if (!(interval >= 5 && interval <= 10080)) throw new Error('取得間隔は5分〜7日(10080分)で指定してください');
+  return { type: 'url', url: url.toString(), format: s.format, path, intervalMinutes: interval };
+}
 
 /** 計画の整合性を検証する。問題があれば説明文を返す。 */
 export function validatePlan(tasks: PlannedTask[], teamRoles: RoleDefinition[]): string | undefined {

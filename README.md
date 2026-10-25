@@ -57,6 +57,7 @@ HOST=0.0.0.0 DASHBOARD_TOKEN=長いランダムな文字列 npm start
 | `MAX_ATTEMPTS` | `3` | 人間に判断を仰ぐまでの修正回数 |
 | `MAX_REVIEWERS` | `2` | 1タスクあたりのレビュー担当の上限 |
 | `COMMAND_PROVIDERS` | なし | CLI型エージェントの追加(下記) |
+| `INGEST_TOKEN` | 自動生成(`data/secrets.json`) | 外部サービスからKPIの値を送るときのトークン |
 | `DATA_DIR` / `WORKSPACE_DIR` | `data/` / `workspaces/` | 状態の保存先 / 成果物の作業場所 |
 
 ### 他のAIサービスとの連携
@@ -71,6 +72,21 @@ COMMAND_PROVIDERS='{"codex":{"command":"codex","args":["exec","-"]}}' npm start
 追加したプロバイダは、管理画面の「役割」で、役割の担当AIサービスとして選べます。
 コマンドと引数は、使うCLIのドキュメントに合わせてください。
 CLI型ではツール単位の承認を挟めないため、CLI側のサンドボックス設定で外部公開や費用の発生する操作を禁止してください。
+
+## KPIの自動取り込み
+
+事業のKPIは、手入力のほかに2つの方法で自動更新できます(事業の「編集」で設定)。
+
+- **URLから定期取得**: JSON(例 `data.total`)、CSV(例 セル `B2`。Googleスプレッドシートを「ウェブに公開」したCSVなど)、
+  テキストのURLを、5分〜7日の間隔で読みに行きます。全体画面の「今すぐ取得」でもすぐ取り込めます。
+- **外部サービスから送信**: Zapier・Make・Google Apps Script などから `POST /api/ingest/kpi` に送ります。
+  宛先・トークン・送り方の例は、事業の編集画面の「外部サービスから値を送る方法」に表示されます。
+
+```bash
+curl -X POST http://<サーバー>/api/ingest/kpi \
+  -H "Authorization: Bearer <取り込み用トークン>" -H "Content-Type: application/json" \
+  -d '{"businessId":"<事業ID>","kpi":"月間売上","value":1234567}'
+```
 
 ## 費用の目安と調整
 

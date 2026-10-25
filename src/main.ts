@@ -8,6 +8,8 @@ import { Store } from './core/store.ts';
 import { createRegistryFromEnv } from './providers/registry.ts';
 import { DEFAULT_ROLES } from './roles/catalog.ts';
 import { createDashboardServer } from './server/http.ts';
+import { KpiSync } from './core/kpi-sync.ts';
+import { loadSecrets } from './core/secrets.ts';
 
 const root = resolve(fileURLToPath(import.meta.url), '../..');
 const dataDir = resolve(process.env.DATA_DIR ?? join(root, 'data'));
@@ -31,6 +33,9 @@ const orchestrator = new Orchestrator({
   maxReviewers: Number(process.env.MAX_REVIEWERS ?? 2),
 });
 
+const secrets = loadSecrets(dataDir);
+const kpiSync = new KpiSync(store, orchestrator);
+
 const server = createDashboardServer({
   store,
   approvals,
@@ -39,6 +44,8 @@ const server = createDashboardServer({
   publicDir: join(root, 'public'),
   workspaceRoot,
   token,
+  ingestToken: secrets.ingestToken,
+  kpiSync,
 });
 
 server.listen(port, host, () => {
@@ -49,6 +56,7 @@ server.listen(port, host, () => {
   for (const h of hosts) console.log(`  ダッシュボード: http://${h}:${port}/login?token=${token}`);
   if (!process.env.DASHBOARD_TOKEN) console.log('  ※ トークンは起動ごとに変わります。固定するには DASHBOARD_TOKEN を設定してください。');
   orchestrator.resume();
+  kpiSync.start();
 });
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

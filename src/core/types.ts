@@ -62,6 +62,16 @@ export interface ApprovalRequest {
   decidedAt?: string;
 }
 
+/** KPIの値をURLから定期的に取り込む設定。 */
+export interface KpiSource {
+  type: 'url';
+  url: string;
+  /** json: パス(例 data.total) / csv: セル番地(例 B2) / text: 本文の最初の数値 */
+  format: 'json' | 'csv' | 'text';
+  path: string;
+  intervalMinutes: number;
+}
+
 /** 事業の成果指標(売上・会員数など)。 */
 export interface Kpi {
   id: string;
@@ -70,6 +80,10 @@ export interface Kpi {
   target: number | null;
   current: number | null;
   updatedAt: string;
+  /** 自動取り込みの設定。なければ手入力(外部からの送信は設定なしで受け付ける)。 */
+  source?: KpiSource;
+  /** 最後に自動で取り込んだ結果。 */
+  sync?: { at: string; ok: boolean; via: 'url' | 'webhook'; error?: string };
 }
 
 /** 事業。複数のプロジェクトをまとめ、既定のチームと月予算を持つ。 */

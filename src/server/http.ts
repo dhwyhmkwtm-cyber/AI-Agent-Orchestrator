@@ -6,7 +6,9 @@ import type { Approvals } from '../core/approvals.ts';
 import type { BusinessInput, Orchestrator, RoleInput } from '../core/orchestrator.ts';
 import { EFFORT_CHOICES, MODEL_CHOICES, TOOL_CHOICES } from '../roles/catalog.ts';
 import { DEFAULT_MODEL } from '../providers/claude-code.ts';
+import { parseNumber, type KpiSync } from '../core/kpi-sync.ts';
 import { monthKey, type Store } from '../core/store.ts';
+import type { KpiSource } from '../core/types.ts';
 
 export interface ServerOptions {
   store: Store;
@@ -18,6 +20,9 @@ export interface ServerOptions {
   workspaceRoot: string;
   /** ダッシュボードのログイントークン。 */
   token: string;
+  /** 外部サービスからKPIの値を受け取るときのトークン。 */
+  ingestToken: string;
+  kpiSync: KpiSync;
 }
 
 const COOKIE = 'orchestrator_token';
@@ -124,6 +129,7 @@ function businessInput(body: Record<string, unknown>): Partial<BusinessInput> {
         unit: k.unit === undefined ? undefined : String(k.unit),
         target: num(k.target),
         current: num(k.current),
+        source: k.source && typeof k.source === 'object' ? (k.source as KpiSource) : null,
       };
     });
   }
@@ -161,6 +167,9 @@ function listFiles(root: string, dir = root, out: Array<{ path: string; size: nu
  * - POST /api/businesses/:id       事業の更新(同じ項目+kpis、指定したものだけ)
  * - POST /api/businesses/:id/archive  アーカイブ {archived: boolean}
  * - DELETE /api/businesses/:id     事業の削除(プロジェクトがない場合のみ)
+ * - POST /api/businesses/:id/kpis/:kpiId/sync  URLから取得する設定のKPIを今すぐ取り込む
+ * - POST /api/ingest/kpi           外部サービスからKPIの値を受け取る {businessId, kpi(IDか名前), value}
+ *                                  (Authorization: Bearer <取り込み用トークン>)
  * - POST /api/projects/:id/move    プロジェクトの事業を変更 {businessId: string | null}
  * - POST /api/roles                役割の追加 {name, mission, criteria[], tools[], provider, model?, effort?}
  * - POST /api/roles/:id            役割の更新(同じ項目すべて)
@@ -196,12 +205,28 @@ export function createDashboardServer(opts: ServerOptions): Server {
     }
 
     if (!pathname.startsWith('/api/')) return serveStatic(res, pathname);
+    // 外部サービス(Zapier・Make・GAS など)からのKPIの値の受け口。専用のトークンで認証する
+    if (method === 'POST' && pathname === '/api/ingest/kpi') {
+      const supplied = req.headers.authorization?.replace(/^Bearer\s+/i, '') ?? '';
+      if (!safeEqual(supplied, opts.ingestToken)) throw new HttpError(401, 'unauthorized');
+      const body = await readJson(req);
+      let value: number;
+      try {
+        value = parseNumber(body.value);
+      } catch (err) {
+        throw new HttpError(400, (err as Error).message);
+      }
+      const kpi = attempt(() => orchestrator.setKpiValue(String(body.businessId ?? ''), String(body.kpi ?? ''), value, 'webhook'));
+      return json(res, 200, { ok: true, kpi: { id: kpi.id, name: kpi.name, current: kpi.current } });
+    }
+
     if (!authorized(req)) throw new HttpError(401, 'unauthorized');
 
     if (method === 'GET' && pathname === '/api/state') {
       return json(res, 200, {
         ...store.state,
         month: monthKey(),
+        ingestToken: opts.ingestToken,
         choices: { tools: TOOL_CHOICES, models: modelChoices(), efforts: EFFORT_CHOICES, providers: opts.providerIds },
       });
     }
@@ -256,6 +281,16 @@ export function createDashboardServer(opts: ServerOptions): Server {
     if (method === 'DELETE' && m) {
       attempt(() => orchestrator.deleteBusiness(m![1]), 409);
       return json(res, 200, { ok: true });
+    }
+
+    m = /^\/api\/businesses\/([\w-]+)\/kpis\/([\w-]+)\/sync$/.exec(pathname);
+    if (method === 'POST' && m) {
+      try {
+        await opts.kpiSync.syncOne(m[1], m[2]);
+      } catch (err) {
+        throw new HttpError(400, (err as Error).message);
+      }
+      return json(res, 200, store.state.businesses.find((b) => b.id === m![1])?.kpis.find((k) => k.id === m![2]) ?? null);
     }
 
     m = /^\/api\/businesses\/([\w-]+)\/archive$/.exec(pathname);

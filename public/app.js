@@ -233,14 +233,34 @@ function roleHistoryView(s) {
     s.roleHistory.length > 100 && h('p', { class: 'meta' }, `新しい100件を表示しています(全${s.roleHistory.length}件)`));
 }
 
-function kpiView(k) {
+function kpiView(k, b) {
   const ratio = k.target ? k.current / k.target : null;
+  const syncNow = async (ev) => {
+    ev.target.disabled = true;
+    try {
+      await api(`/api/businesses/${b.id}/kpis/${k.id}/sync`, { method: 'POST' });
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      ev.target.disabled = false;
+    }
+  };
+  const status = k.sync
+    ? (k.sync.ok
+        ? `自動取得(${k.sync.via === 'url' ? 'URL' : '外部から送信'}) ${new Date(k.sync.at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+        : null)
+    : (k.source ? '自動取得: まだ取得していません' : null);
   return h('div', { class: 'kpi' },
     h('div', { class: 'row' },
       h('span', {}, k.name),
       h('span', { class: 'value' }, `${num(k.current)}${k.unit}`, k.target !== null && h('span', { class: 'meta' }, ` / 目標 ${num(k.target)}${k.unit}`))),
     k.target ? budgetBarPlain(ratio) : null,
-    h('div', { class: 'meta' }, `${ratio !== null && k.current !== null ? `達成率 ${Math.round(ratio * 100)}% ・ ` : ''}更新 ${date(k.updatedAt)}`));
+    h('div', { class: 'meta' }, `${ratio !== null && k.current !== null ? `達成率 ${Math.round(ratio * 100)}% ・ ` : ''}更新 ${date(k.updatedAt)}`),
+    (status || k.sync?.ok === false || k.source) && h('div', { class: 'row between' },
+      k.sync?.ok === false
+        ? h('span', { class: 'error' }, `取得失敗: ${k.sync.error}`)
+        : h('span', { class: 'meta' }, status ?? ''),
+      k.source && h('button', { class: 'btn small', onclick: syncNow }, '今すぐ取得')));
 }
 
 function budgetBarPlain(ratio) {
@@ -275,7 +295,7 @@ function renderOverview(s, box) {
       h('div', {},
         h('div', { class: 'meta' }, b?.monthlyBudgetUsd ? `今月 ${usd(spent)} / 月予算 ${usd(b.monthlyBudgetUsd)}` : `今月 ${usd(spent)}${b ? '(月予算なし)' : ''}`),
         b?.monthlyBudgetUsd && budgetBar(spent, b.monthlyBudgetUsd)),
-      b?.kpis.length > 0 && h('div', { class: 'kpis' }, ...b.kpis.map(kpiView)),
+      b?.kpis.length > 0 && h('div', { class: 'kpis' }, ...b.kpis.map((k) => kpiView(k, b))),
       h('div', { class: 'counts' },
         chip([`進行中 ${count(['planning', 'running'])}`, 'run']),
         chip([`承認待ち・停止 ${count(['awaiting_plan_approval', 'paused'])}`, 'warn']),
@@ -525,28 +545,72 @@ function openBusiness(b) {
   $('businessDialogTitle').textContent = b ? '事業の編集' : '新規事業';
   teamCheckboxes($('businessTeamChoices'), b ? b.team : ui.state.roles.map((r) => r.id));
   $('kpiRows').replaceChildren(...(b?.kpis ?? []).map(kpiRow));
+  ingestHelp(b);
   $('businessError').hidden = true;
   $('businessDialog').showModal();
 }
 
+const PATH_HINT = { json: 'パス(例 data.total)', csv: 'セル番地(例 B2)', text: '(本文の最初の数値を使う)' };
+
 function kpiRow(k = {}) {
   const field = (label, name, attrs) => h('label', {}, label, h('input', { name, value: k[name] ?? '', ...attrs }));
-  const row = h('div', { class: 'kpi-row', 'data-id': k.id ?? '' },
+  const src = k.source ?? {};
+  const wrap = h('div', { class: 'kpi-item stack', 'data-id': k.id ?? '' });
+  const row = h('div', { class: 'kpi-row' },
     field('指標名', 'kname', { value: k.name ?? '', placeholder: '例: 月間売上', maxlength: 60 }),
     field('現在値', 'current', { type: 'number', step: 'any' }),
     field('目標', 'target', { type: 'number', step: 'any' }),
     field('単位', 'unit', { placeholder: '円', maxlength: 10 }),
-  );
-  row.append(h('button', { type: 'button', class: 'btn', 'aria-label': 'このKPIを削除', onclick: () => row.remove() }, '×'));
-  return row;
+    h('button', { type: 'button', class: 'btn', 'aria-label': 'このKPIを削除', onclick: () => wrap.remove() }, '×'));
+
+  const mode = h('select', { name: 'mode' },
+    h('option', { value: 'manual', selected: !k.source }, '手入力・外部から送信'),
+    h('option', { value: 'url', selected: !!k.source }, 'URLから定期取得'));
+  const format = h('select', { name: 'format' },
+    ...[['json', 'JSON'], ['csv', 'CSV(公開したスプレッドシートなど)'], ['text', 'テキスト']].map(([v, l]) => h('option', { value: v, selected: (src.format ?? 'json') === v }, l)));
+  const path = h('input', { name: 'path', value: src.path ?? '' });
+  const urlFields = h('div', { class: 'kpi-source' },
+    h('label', { class: 'wide' }, '取得元URL', h('input', { name: 'url', type: 'url', value: src.url ?? '', placeholder: 'https://…' })),
+    h('label', {}, '形式', format),
+    h('label', {}, '取り出す場所', path),
+    h('label', {}, '間隔(分)', h('input', { name: 'interval', type: 'number', min: 5, max: 10080, value: src.intervalMinutes ?? 60 })));
+  const sync = () => {
+    urlFields.hidden = mode.value !== 'url';
+    path.placeholder = PATH_HINT[format.value];
+    path.disabled = format.value === 'text';
+  };
+  mode.onchange = sync;
+  format.onchange = sync;
+  sync();
+  wrap.append(row, h('label', { class: 'kpi-mode' }, '取り込み', mode), urlFields);
+  return wrap;
 }
 
 function readKpis() {
-  return [...$('kpiRows').children].map((row) => {
-    const v = (n) => row.querySelector(`[name=${n}]`).value;
+  return [...$('kpiRows').children].map((item) => {
+    const v = (n) => item.querySelector(`[name=${n}]`).value;
     const n = (x) => (x === '' ? null : Number(x));
-    return { id: row.dataset.id || undefined, name: v('kname'), unit: v('unit'), current: n(v('current')), target: n(v('target')) };
-  }).filter((k) => k.name.trim() || k.current !== null || k.target !== null);
+    const source = v('mode') === 'url'
+      ? { type: 'url', url: v('url'), format: v('format'), path: v('path'), intervalMinutes: Number(v('interval')) }
+      : null;
+    return { id: item.dataset.id || undefined, name: v('kname'), unit: v('unit'), current: n(v('current')), target: n(v('target')), source };
+  }).filter((k) => k.name.trim() || k.current !== null || k.target !== null || k.source);
+}
+
+/** 外部サービスから値を送る方法の説明。事業を保存してから使える。 */
+function ingestHelp(b) {
+  const box = $('ingestHelp');
+  if (!b) {
+    box.replaceChildren(h('p', { class: 'meta' }, '事業を保存すると、外部サービスから値を送るための情報がここに表示されます。'));
+    return;
+  }
+  const example = JSON.stringify({ businessId: b.id, kpi: b.kpis[0]?.name ?? '月間売上', value: 1234567 });
+  box.replaceChildren(
+    h('p', { class: 'meta' }, 'Zapier・Make・Google Apps Script などから、次の宛先に POST すると値を更新できます(kpi は指標名かID)。'),
+    h('div', { class: 'meta' }, '宛先: ', h('code', {}, `${location.origin}/api/ingest/kpi`)),
+    h('div', { class: 'meta' }, 'ヘッダー: ', h('code', {}, `Authorization: Bearer ${ui.state.ingestToken}`)),
+    h('div', { class: 'meta' }, '本文(JSON): ', h('code', {}, example)),
+    h('p', { class: 'meta' }, 'このトークンは値の送信専用で、管理画面には入れません。外部に漏れた場合は INGEST_TOKEN で差し替えてください。'));
 }
 
 async function archiveBusiness(b, archived) {
