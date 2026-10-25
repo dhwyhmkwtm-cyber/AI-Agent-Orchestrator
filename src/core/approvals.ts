@@ -25,6 +25,7 @@ export interface ApprovalDecision {
 export class Approvals {
   private waiters = new Map<string, (d: ApprovalDecision) => void>();
   private listeners: Array<(a: ApprovalRequest) => void> = [];
+  private requestListeners: Array<(a: ApprovalRequest) => void> = [];
 
   constructor(private readonly store: Store) {}
 
@@ -39,6 +40,7 @@ export class Approvals {
       message: `承認依頼 [${CATEGORY_LABEL[input.category]}] ${input.title}`,
     });
     this.store.changed();
+    for (const l of this.requestListeners) l(approval);
     return approval;
   }
 
@@ -75,6 +77,11 @@ export class Approvals {
     waiter?.({ approved, comment: approval.comment });
     for (const l of this.listeners) l(approval);
     return approval;
+  }
+
+  /** 承認依頼が出たときに呼ばれる(通知の送信に使う)。 */
+  onRequested(listener: (a: ApprovalRequest) => void): void {
+    this.requestListeners.push(listener);
   }
 
   onDecided(listener: (a: ApprovalRequest) => void): void {

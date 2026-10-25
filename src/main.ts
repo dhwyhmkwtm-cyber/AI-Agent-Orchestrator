@@ -10,6 +10,7 @@ import { DEFAULT_ROLES } from './roles/catalog.ts';
 import { createDashboardServer } from './server/http.ts';
 import { KpiSync } from './core/kpi-sync.ts';
 import { loadSecrets } from './core/secrets.ts';
+import { PushNotifier } from './core/notify.ts';
 
 const root = resolve(fileURLToPath(import.meta.url), '../..');
 const dataDir = resolve(process.env.DATA_DIR ?? join(root, 'data'));
@@ -35,6 +36,11 @@ const orchestrator = new Orchestrator({
 
 const secrets = loadSecrets(dataDir);
 const kpiSync = new KpiSync(store, orchestrator);
+const push = new PushNotifier(store, approvals, {
+  ...secrets.vapid,
+  // 通知サービスに伝える連絡先。運用者のメールアドレス(mailto:)かサイトのURLにする
+  subject: process.env.PUSH_SUBJECT ?? 'https://github.com/dhwyhmkwtm-cyber/AI-Agent-Orchestrator',
+});
 
 const server = createDashboardServer({
   store,
@@ -46,6 +52,8 @@ const server = createDashboardServer({
   token,
   ingestToken: secrets.ingestToken,
   kpiSync,
+  push,
+  pushPublicKey: secrets.vapid.publicKey,
 });
 
 server.listen(port, host, () => {

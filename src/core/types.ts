@@ -204,7 +204,17 @@ export interface LogEvent {
   message: string;
 }
 
+/** 通知を受け取る端末(Web Push の購読情報)。 */
+export interface PushSubscriptionRecord {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+  /** 端末の見分け用(例: iPad)。 */
+  label: string;
+  createdAt: string;
+}
+
 export interface State {
+  pushSubscriptions: PushSubscriptionRecord[];
   roles: RoleDefinition[];
   roleHistory: RoleChange[];
   businesses: Business[];

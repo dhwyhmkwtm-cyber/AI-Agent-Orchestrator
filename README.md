@@ -57,6 +57,7 @@ HOST=0.0.0.0 DASHBOARD_TOKEN=長いランダムな文字列 npm start
 | `MAX_ATTEMPTS` | `3` | 人間に判断を仰ぐまでの修正回数 |
 | `MAX_REVIEWERS` | `2` | 1タスクあたりのレビュー担当の上限 |
 | `COMMAND_PROVIDERS` | なし | CLI型エージェントの追加(下記) |
+| `PUSH_SUBJECT` | このリポジトリのURL | 通知サービスに伝える連絡先(`mailto:you@example.com` など) |
 | `INGEST_TOKEN` | 自動生成(`data/secrets.json`) | 外部サービスからKPIの値を送るときのトークン |
 | `DATA_DIR` / `WORKSPACE_DIR` | `data/` / `workspaces/` | 状態の保存先 / 成果物の作業場所 |
 
@@ -72,6 +73,29 @@ COMMAND_PROVIDERS='{"codex":{"command":"codex","args":["exec","-"]}}' npm start
 追加したプロバイダは、管理画面の「役割」で、役割の担当AIサービスとして選べます。
 コマンドと引数は、使うCLIのドキュメントに合わせてください。
 CLI型ではツール単位の承認を挟めないため、CLI側のサンドボックス設定で外部公開や費用の発生する操作を禁止してください。
+
+## iPad に承認依頼を通知する
+
+承認依頼(計画・外部公開・費用・危険な操作など)が来ると、iPad に通知を送れます(Web Push)。
+ホーム画面のアイコンには承認待ちの件数がバッジで表示されます。iPad で受け取るには次の条件があります。
+
+- iPadOS 16.4 以降
+- **HTTPS** のアドレスで開いていること(`http://192.168.…` のようなアドレスでは使えません)
+- Safari の共有ボタン →「ホーム画面に追加」で追加したアプリから開いていること
+
+HTTPS で開く簡単な方法は、PC と iPad の両方に [Tailscale](https://tailscale.com/) を入れて、
+PC で `tailscale serve` を使い、このサーバー(既定は `http://127.0.0.1:8787`)を tailnet 内に HTTPS で公開することです
+(コマンドの書き方は Tailscale のドキュメントを確認してください)。Cloudflare Tunnel なども使えます。
+
+設定手順:
+
+1. iPad の Safari で HTTPS のダッシュボードURL(`/login?token=…`)を開く
+2. 共有ボタン →「ホーム画面に追加」
+3. ホーム画面の「Orchestrator」から開き、上部の「通知」→「通知をオンにする」
+4. 「テスト通知を送る」で届くことを確認
+
+通知には承認の件名だけを表示し、詳しい内容はアプリを開いて確認する形にしています(ロック画面に表示されるため)。
+通知の署名鍵は `data/secrets.json` に保存されます。消すと登録済みの端末に届かなくなるので、その場合は端末側で登録し直してください。
 
 ## KPIの自動取り込み
 

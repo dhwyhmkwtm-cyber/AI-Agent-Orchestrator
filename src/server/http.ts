@@ -7,6 +7,7 @@ import type { BusinessInput, Orchestrator, RoleInput } from '../core/orchestrato
 import { EFFORT_CHOICES, MODEL_CHOICES, TOOL_CHOICES } from '../roles/catalog.ts';
 import { DEFAULT_MODEL } from '../providers/claude-code.ts';
 import { parseNumber, type KpiSync } from '../core/kpi-sync.ts';
+import type { PushNotifier } from '../core/notify.ts';
 import { monthKey, type Store } from '../core/store.ts';
 import type { KpiSource } from '../core/types.ts';
 
@@ -23,6 +24,9 @@ export interface ServerOptions {
   /** 外部サービスからKPIの値を受け取るときのトークン。 */
   ingestToken: string;
   kpiSync: KpiSync;
+  push: PushNotifier;
+  /** 端末が通知の購読に使う公開鍵。 */
+  pushPublicKey: string;
 }
 
 const COOKIE = 'orchestrator_token';
@@ -35,6 +39,7 @@ const MIME: Record<string, string> = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json',
 };
 
 class HttpError extends Error {
@@ -168,6 +173,9 @@ function listFiles(root: string, dir = root, out: Array<{ path: string; size: nu
  * - POST /api/businesses/:id/archive  アーカイブ {archived: boolean}
  * - DELETE /api/businesses/:id     事業の削除(プロジェクトがない場合のみ)
  * - POST /api/businesses/:id/kpis/:kpiId/sync  URLから取得する設定のKPIを今すぐ取り込む
+ * - POST /api/push/subscribe       この端末で通知を受け取る {subscription, label}
+ * - POST /api/push/unsubscribe     通知を止める {endpoint}
+ * - POST /api/push/test            登録済みの全端末にテスト通知
  * - POST /api/ingest/kpi           外部サービスからKPIの値を受け取る {businessId, kpi(IDか名前), value}
  *                                  (Authorization: Bearer <取り込み用トークン>)
  * - POST /api/projects/:id/move    プロジェクトの事業を変更 {businessId: string | null}
@@ -227,6 +235,9 @@ export function createDashboardServer(opts: ServerOptions): Server {
         ...store.state,
         month: monthKey(),
         ingestToken: opts.ingestToken,
+        pushPublicKey: opts.pushPublicKey,
+        // 購読情報そのものは返さず、端末の見分けに必要な分だけ返す
+        pushSubscriptions: store.state.pushSubscriptions.map((s) => ({ endpoint: s.endpoint, label: s.label, createdAt: s.createdAt })),
         choices: { tools: TOOL_CHOICES, models: modelChoices(), efforts: EFFORT_CHOICES, providers: opts.providerIds },
       });
     }
@@ -281,6 +292,22 @@ export function createDashboardServer(opts: ServerOptions): Server {
     if (method === 'DELETE' && m) {
       attempt(() => orchestrator.deleteBusiness(m![1]), 409);
       return json(res, 200, { ok: true });
+    }
+
+    if (method === 'POST' && pathname === '/api/push/subscribe') {
+      const body = await readJson(req);
+      const subscription = (body.subscription ?? {}) as { endpoint: string; keys: { p256dh: string; auth: string } };
+      return json(res, 201, attempt(() => opts.push.subscribe(subscription, String(body.label ?? ''))));
+    }
+    if (method === 'POST' && pathname === '/api/push/unsubscribe') {
+      const body = await readJson(req);
+      opts.push.unsubscribe(String(body.endpoint ?? ''));
+      return json(res, 200, { ok: true });
+    }
+    if (method === 'POST' && pathname === '/api/push/test') {
+      const pending = store.state.approvals.filter((a) => a.status === 'pending').length;
+      const sent = await opts.push.broadcast({ title: 'テスト通知', body: '承認依頼が来るとこのように通知されます。', tag: 'test', url: '/', badge: pending });
+      return json(res, 200, { sent, total: store.state.pushSubscriptions.length });
     }
 
     m = /^\/api\/businesses\/([\w-]+)\/kpis\/([\w-]+)\/sync$/.exec(pathname);
@@ -383,6 +410,8 @@ export function createDashboardServer(opts: ServerOptions): Server {
       'content-type': MIME[extname(file)] ?? 'application/octet-stream',
       'content-security-policy': "default-src 'self'; style-src 'self'; script-src 'self'",
       'x-content-type-options': 'nosniff',
+      // 更新がすぐ反映されるように(特に sw.js)
+      'cache-control': 'no-cache',
     });
     createReadStream(file).pipe(res);
   };

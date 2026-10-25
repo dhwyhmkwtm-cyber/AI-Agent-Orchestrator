@@ -12,6 +12,7 @@ import { MockProvider } from '../src/providers/mock.ts';
 import { ProviderRegistry } from '../src/providers/registry.ts';
 import { DEFAULT_ROLES } from '../src/roles/catalog.ts';
 import { createDashboardServer } from '../src/server/http.ts';
+import { PushNotifier } from '../src/core/notify.ts';
 
 function setup(fetchText: (url: string) => Promise<string> = async () => '0') {
   const store = new Store();
@@ -87,6 +88,7 @@ test('外部サービスからの値の受け口は専用トークンで認証�
   const biz = orchestrator.createBusiness({ name: 'b', kpis: [{ name: '月間売上', unit: '円' }] });
   const server = createDashboardServer({
     store, approvals, orchestrator, kpiSync: sync, providerIds: ['mock'],
+    push: new PushNotifier(store, approvals, { publicKey: 'p', privateKey: 'k', subject: 'mailto:a@example.com' }, async () => {}), pushPublicKey: 'p',
     publicDir: workspaceRoot, workspaceRoot, token: 'dashboard-token', ingestToken: 'ingest-token',
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));

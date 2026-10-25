@@ -50,7 +50,7 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 .topbar {
   position: sticky; top: 0; z-index: 5;
-  display: flex; align-items: center; gap: .75rem;
+  display: flex; align-items: center; gap: .5rem .75rem; flex-wrap: wrap;
   padding: calc(.6rem + env(safe-area-inset-top)) 16px .6rem;
   background: var(--panel); border-bottom: 1px solid var(--border);
 }
@@ -188,3 +188,6 @@ select { appearance: auto; }
 @media (max-width: 600px) { .kpi-source { grid-template-columns: 1fr; } }
 .btn.small { min-height: 32px; padding: 0 10px; font-size: .85rem; }
 .ingest code { overflow-wrap: anywhere; }
+.steps { margin: 0; padding-left: 1.3rem; }
+.steps li { margin-bottom: .4rem; }
+.notice { background: var(--chip-bg); border-radius: 10px; padding: 12px; }

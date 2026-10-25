@@ -25,7 +25,7 @@ export class Store extends EventEmitter {
   /** dataDir を省略するとメモリ上だけで動く(テスト用)。 */
   constructor(dataDir?: string) {
     super();
-    this.state = { roles: [], roleHistory: [], businesses: [], projects: [], tasks: [], approvals: [] };
+    this.state = { pushSubscriptions: [], roles: [], roleHistory: [], businesses: [], projects: [], tasks: [], approvals: [] };
     if (!dataDir) return;
     mkdirSync(dataDir, { recursive: true });
     this.statePath = join(dataDir, 'state.json');

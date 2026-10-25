@@ -105,6 +105,8 @@ function renderApprovals(s) {
   const badge = $('approvalCount');
   badge.textContent = pending.length;
   badge.classList.toggle('hot', pending.length > 0);
+  // ホーム画面アプリのアイコンに承認待ちの件数を出す(対応している端末のみ)
+  if (navigator.setAppBadge) (pending.length ? navigator.setAppBadge(pending.length) : navigator.clearAppBadge()).catch(() => {});
   document.title = pending.length ? `(${pending.length}) AI Agent Orchestrator` : 'AI Agent Orchestrator';
 
   const box = $('approvals');
@@ -733,6 +735,126 @@ async function submitNewProject(ev) {
   }
 }
 
+// ------------------------------------------------------------------ 通知(Web Push)
+
+const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+
+function base64UrlToBytes(s) {
+  const b64 = (s + '='.repeat((4 - (s.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/');
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+
+async function currentSubscription() {
+  if (!pushSupported() || !window.isSecureContext) return null;
+  const reg = await navigator.serviceWorker.getRegistration();
+  return reg ? reg.pushManager.getSubscription() : null;
+}
+
+async function openNotify() {
+  $('notifyDialog').showModal();
+  await renderNotify();
+}
+
+async function renderNotify() {
+  const box = $('notifyBody');
+  const devices = ui.state.pushSubscriptions;
+  const deviceList = h('p', { class: 'meta' }, devices.length
+    ? `通知を受け取る端末: ${devices.map((d) => d.label).join('、')}`
+    : '通知を受け取る端末はまだありません。');
+  const steps = (title, items) => h('div', { class: 'notice stack' }, h('strong', {}, title), h('ol', { class: 'steps' }, ...items.map((i) => h('li', {}, i))));
+
+  if (!window.isSecureContext) {
+    box.replaceChildren(
+      steps('通知を使うには HTTPS での接続が必要です', [
+        'iPad の通知は、https:// で始まるアドレスで開いたときだけ使えます(いまは http:// で開いています)。',
+        'Tailscale(tailscale serve)や Cloudflare Tunnel を使うと、手元のPCのこの画面を HTTPS で安全に開けます。',
+        'HTTPS のアドレスで開き直してから、もう一度「通知」を押してください。',
+      ]),
+      deviceList);
+    return;
+  }
+  if (isIOS() && !isStandalone()) {
+    box.replaceChildren(
+      steps('先にホーム画面に追加してください', [
+        'Safari の共有ボタン(□に↑)を押します。',
+        '「ホーム画面に追加」を選びます。',
+        'ホーム画面にできた「Orchestrator」のアイコンから開き直し、もう一度「通知」を押してください。',
+      ]),
+      h('p', { class: 'meta' }, 'iPad では、ホーム画面に追加したアプリからだけ通知を受け取れます(iPadOS 16.4 以降)。'),
+      deviceList);
+    return;
+  }
+  if (!pushSupported()) {
+    box.replaceChildren(h('p', {}, 'このブラウザは通知に対応していません。iPad の場合は iPadOS 16.4 以降が必要です。'), deviceList);
+    return;
+  }
+  if (Notification.permission === 'denied') {
+    box.replaceChildren(
+      steps('通知が拒否されています', [
+        isIOS() ? 'iPad の「設定」アプリ →「通知」→「Orchestrator」で通知を許可してください。' : 'ブラウザのサイト設定で、このサイトの通知を許可してください。',
+        '許可したら、この画面を開き直してください。',
+      ]),
+      deviceList);
+    return;
+  }
+
+  const sub = await currentSubscription();
+  const registered = sub && devices.find((d) => d.endpoint === sub.endpoint);
+  const message = h('p', { class: 'meta', role: 'status' });
+  if (registered) {
+    const test = h('button', { class: 'btn primary' }, 'テスト通知を送る');
+    test.onclick = async () => {
+      test.disabled = true;
+      try {
+        const r = await api('/api/push/test', { method: 'POST' });
+        message.textContent = `${r.total}台中${r.sent}台に送りました。届かない場合は、iPad の集中モードや通知の設定を確認してください。`;
+      } catch (e) {
+        message.textContent = `送信に失敗しました: ${e.message}`;
+      } finally {
+        test.disabled = false;
+      }
+    };
+    const off = h('button', { class: 'btn bad' }, 'この端末の通知を止める');
+    off.onclick = async () => {
+      await api('/api/push/unsubscribe', { method: 'POST', body: JSON.stringify({ endpoint: sub.endpoint }) }).catch(() => {});
+      await sub.unsubscribe().catch(() => {});
+      await refresh();
+      await renderNotify();
+    };
+    box.replaceChildren(
+      h('p', {}, `この端末(${registered.label})は、承認依頼が来ると通知を受け取ります。`),
+      h('p', { class: 'meta' }, '通知には承認の件名だけを表示し、詳しい内容はアプリを開いて確認する形にしています(ロック画面に表示されるため)。'),
+      h('div', { class: 'row' }, test, off), message, deviceList);
+    return;
+  }
+
+  const label = h('input', { value: isIOS() ? 'iPad' : 'この端末', maxlength: 40 });
+  const on = h('button', { class: 'btn primary' }, '通知をオンにする');
+  on.onclick = async () => {
+    on.disabled = true;
+    try {
+      // iPad ではボタンを押した流れの中で許可を求める必要がある
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') throw new Error('通知が許可されませんでした');
+      const reg = await navigator.serviceWorker.ready;
+      const subscription = (await reg.pushManager.getSubscription())
+        ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64UrlToBytes(ui.state.pushPublicKey) }));
+      await api('/api/push/subscribe', { method: 'POST', body: JSON.stringify({ subscription: subscription.toJSON(), label: label.value }) });
+      await refresh();
+      await renderNotify();
+    } catch (e) {
+      message.textContent = `設定できませんでした: ${e.message}`;
+      on.disabled = false;
+    }
+  };
+  box.replaceChildren(
+    h('p', {}, '承認依頼(計画・外部公開・費用・危険な操作など)が来たときに、この端末に通知します。'),
+    h('label', {}, '端末の名前', label),
+    h('div', { class: 'row' }, on), message, deviceList);
+}
+
 // ------------------------------------------------------------------ 起動
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -743,6 +865,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('overviewBtn').addEventListener('click', () => select(null));
   $('addKpiBtn').addEventListener('click', () => $('kpiRows').append(kpiRow()));
   $('rolesBtn').addEventListener('click', showRoles);
+  $('notifyBtn').addEventListener('click', openNotify);
+  if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(() => {});
   $('roleForm').addEventListener('submit', submitRole);
   $('roleResetBtn').addEventListener('click', () => {
     const id = $('roleForm').elements.id.value;

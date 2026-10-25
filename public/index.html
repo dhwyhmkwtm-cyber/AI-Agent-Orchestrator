@@ -4,7 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Orchestrator">
   <meta name="theme-color" content="#111827">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <title>AI Agent Orchestrator</title>
   <link rel="stylesheet" href="style.css">
   <script src="app.js" defer></script>
@@ -13,6 +16,7 @@
   <header class="topbar">
     <h1><button id="overviewBtn" class="linklike">AI Agent Orchestrator</button></h1>
     <span id="conn" class="conn" title="接続状態">●</span>
+    <button id="notifyBtn" class="btn">通知</button>
     <button id="rolesBtn" class="btn">役割</button>
     <button id="newBusinessBtn" class="btn">＋ 事業</button>
     <button id="newProjectBtn" class="btn primary">＋ プロジェクト</button>
@@ -116,6 +120,16 @@
         </div>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="notifyDialog" class="dialog">
+    <div class="stack">
+      <div class="row between">
+        <h2>承認依頼の通知</h2>
+        <button type="button" class="btn" data-close>閉じる</button>
+      </div>
+      <div id="notifyBody" class="stack"></div>
+    </div>
   </dialog>
 
   <dialog id="fileViewer" class="dialog wide">
