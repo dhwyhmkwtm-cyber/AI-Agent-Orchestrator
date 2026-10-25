@@ -1,0 +1,239 @@
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createReadStream, existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { extname, join, relative, resolve, sep } from 'node:path';
+import { timingSafeEqual } from 'node:crypto';
+import type { Approvals } from '../core/approvals.ts';
+import type { Orchestrator } from '../core/orchestrator.ts';
+import type { Store } from '../core/store.ts';
+
+export interface ServerOptions {
+  store: Store;
+  approvals: Approvals;
+  orchestrator: Orchestrator;
+  publicDir: string;
+  workspaceRoot: string;
+  /** ダッシュボードのログイントークン。 */
+  token: string;
+}
+
+const COOKIE = 'orchestrator_token';
+const MAX_BODY = 64 * 1024;
+const MAX_FILE_VIEW = 512 * 1024;
+const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.json': 'application/json',
+};
+
+class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+function safeEqual(a: string, b: string): boolean {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+}
+
+function readCookie(req: IncomingMessage, name: string): string | undefined {
+  for (const part of (req.headers.cookie ?? '').split(';')) {
+    const [k, ...v] = part.trim().split('=');
+    if (k === name) return decodeURIComponent(v.join('='));
+  }
+  return undefined;
+}
+
+function json(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(JSON.stringify(body));
+}
+
+async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+  let size = 0;
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > MAX_BODY) throw new HttpError(413, 'body too large');
+    chunks.push(chunk as Buffer);
+  }
+  try {
+    return chunks.length ? (JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>) : {};
+  } catch {
+    throw new HttpError(400, 'invalid JSON');
+  }
+}
+
+/** ワークスペース内のパスだけを解決する(シンボリックリンクでの脱出も防ぐ)。 */
+function resolveInside(root: string, rel: string): string {
+  const base = realpathSync(root);
+  const target = resolve(base, rel);
+  if (!existsSync(target)) throw new HttpError(404, 'not found');
+  const real = realpathSync(target);
+  if (real !== base && !real.startsWith(base + sep)) throw new HttpError(403, 'outside workspace');
+  return real;
+}
+
+function listFiles(root: string, dir = root, out: Array<{ path: string; size: number }> = []): typeof out {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) listFiles(root, full, out);
+    else if (entry.isFile()) out.push({ path: relative(root, full), size: statSync(full).size });
+    if (out.length >= 500) break;
+  }
+  return out;
+}
+
+/**
+ * ダッシュボード用のHTTPサーバー。
+ * - GET  /login?token=…            トークンをCookieに保存してダッシュボードへ
+ * - GET  /api/state                全体の状態
+ * - GET  /api/events?projectId=…   作業ログ
+ * - GET  /api/stream               状態変化とログのSSE
+ * - POST /api/projects             プロジェクト作成
+ * - POST /api/projects/:id/retry   失敗したプロジェクトの再開
+ * - POST /api/approvals/:id        承認・却下 {approve: boolean, comment?}
+ * - GET  /api/projects/:id/files[?path=…]  成果物の一覧・内容
+ */
+export function createDashboardServer(opts: ServerOptions): Server {
+  const { store, approvals, orchestrator } = opts;
+
+  const authorized = (req: IncomingMessage): boolean => {
+    const header = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    const supplied = header ?? readCookie(req, COOKIE);
+    return !!supplied && safeEqual(supplied, opts.token);
+  };
+
+  const routes = async (req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> => {
+    const { pathname } = url;
+    const method = req.method ?? 'GET';
+
+    if (pathname === '/login') {
+      const token = url.searchParams.get('token') ?? '';
+      if (!safeEqual(token, opts.token)) throw new HttpError(401, 'invalid token');
+      res.writeHead(302, {
+        'set-cookie': `${COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000`,
+        location: '/',
+      });
+      res.end();
+      return;
+    }
+
+    if (!pathname.startsWith('/api/')) return serveStatic(res, pathname);
+    if (!authorized(req)) throw new HttpError(401, 'unauthorized');
+
+    if (method === 'GET' && pathname === '/api/state') {
+      return json(res, 200, { ...store.state, roles: orchestrator.roles });
+    }
+    if (method === 'GET' && pathname === '/api/events') {
+      return json(res, 200, store.recentEvents(url.searchParams.get('projectId') ?? undefined));
+    }
+    if (method === 'GET' && pathname === '/api/stream') {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
+      res.write('retry: 3000\n\n');
+      const onEvent = (e: unknown) => res.write(`event: log\ndata: ${JSON.stringify(e)}\n\n`);
+      const onChange = () => res.write('event: change\ndata: {}\n\n');
+      const ping = setInterval(() => res.write(': ping\n\n'), 25000);
+      store.on('event', onEvent);
+      store.on('change', onChange);
+      req.on('close', () => {
+        clearInterval(ping);
+        store.off('event', onEvent);
+        store.off('change', onChange);
+      });
+      return;
+    }
+    if (method === 'POST' && pathname === '/api/projects') {
+      const body = await readJson(req);
+      try {
+        const project = orchestrator.createProject({
+          name: String(body.name ?? ''),
+          goal: String(body.goal ?? ''),
+          team: Array.isArray(body.team) ? body.team.map(String) : undefined,
+          budgetUsd: body.budgetUsd === undefined ? undefined : Number(body.budgetUsd),
+        });
+        return json(res, 201, project);
+      } catch (err) {
+        throw new HttpError(400, (err as Error).message);
+      }
+    }
+
+    let m = /^\/api\/projects\/([\w-]+)\/retry$/.exec(pathname);
+    if (method === 'POST' && m) {
+      try {
+        orchestrator.retry(m[1]);
+      } catch (err) {
+        throw new HttpError(409, (err as Error).message);
+      }
+      return json(res, 200, { ok: true });
+    }
+
+    m = /^\/api\/approvals\/([\w-]+)$/.exec(pathname);
+    if (method === 'POST' && m) {
+      const body = await readJson(req);
+      if (typeof body.approve !== 'boolean') throw new HttpError(400, 'approve must be boolean');
+      try {
+        return json(res, 200, approvals.decide(m[1], body.approve, body.comment ? String(body.comment) : undefined));
+      } catch (err) {
+        throw new HttpError(409, (err as Error).message);
+      }
+    }
+
+    m = /^\/api\/projects\/([\w-]+)\/files$/.exec(pathname);
+    if (method === 'GET' && m) {
+      if (!store.state.projects.some((p) => p.id === m![1])) throw new HttpError(404, 'project not found');
+      const root = join(opts.workspaceRoot, m[1]);
+      if (!existsSync(root)) return json(res, 200, []);
+      const rel = url.searchParams.get('path');
+      if (!rel) return json(res, 200, listFiles(root));
+      const file = resolveInside(root, rel);
+      const stat = statSync(file);
+      if (!stat.isFile()) throw new HttpError(400, 'not a file');
+      if (stat.size > MAX_FILE_VIEW) throw new HttpError(413, 'file too large to preview');
+      // 成果物はエージェントが書いた信頼できない内容なので、必ずプレーンテキストで返す
+      res.writeHead(200, {
+        'content-type': 'text/plain; charset=utf-8',
+        'x-content-type-options': 'nosniff',
+        'content-security-policy': "default-src 'none'",
+      });
+      res.end(readFileSync(file));
+      return;
+    }
+
+    throw new HttpError(404, 'not found');
+  };
+
+  const serveStatic = (res: ServerResponse, pathname: string): void => {
+    const rel = pathname === '/' ? 'index.html' : pathname.slice(1);
+    let file: string;
+    try {
+      file = resolveInside(opts.publicDir, rel);
+    } catch {
+      throw new HttpError(404, 'not found');
+    }
+    res.writeHead(200, {
+      'content-type': MIME[extname(file)] ?? 'application/octet-stream',
+      'content-security-policy': "default-src 'self'; style-src 'self'; script-src 'self'",
+      'x-content-type-options': 'nosniff',
+    });
+    createReadStream(file).pipe(res);
+  };
+
+  return createServer((req, res) => {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    routes(req, res, url).catch((err: unknown) => {
+      const status = err instanceof HttpError ? err.status : 500;
+      if (status === 500) console.error(err);
+      if (!res.headersSent) json(res, status, { error: err instanceof Error ? err.message : 'error' });
+      else res.end();
+    });
+  });
+}
