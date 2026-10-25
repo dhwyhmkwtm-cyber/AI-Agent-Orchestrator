@@ -160,3 +160,13 @@ pre.file { max-height: 70vh; overflow: auto; white-space: pre-wrap; background: 
 .plist button:hover, .plist button:focus-visible { background: var(--chip-bg); }
 .group-title { font-size: .8rem; color: var(--muted); margin: .4rem 0 0; }
 select { appearance: auto; }
+
+.kpi-row { display: grid; grid-template-columns: 1.6fr 1.3fr 1.3fr 4em 44px; gap: 6px; align-items: end; }
+.kpi-row label { margin: 0; font-size: .8rem; color: var(--muted); }
+@media (max-width: 600px) { .kpi-row { grid-template-columns: 1fr 1fr; } }
+.kpis { display: flex; flex-direction: column; gap: 8px; }
+.kpi .row { justify-content: space-between; }
+.kpi .value { font-weight: 600; }
+.card.archived { opacity: .75; border-style: dashed; }
+.move { display: flex; gap: .5rem; align-items: center; }
+.move select { width: auto; max-width: 100%; padding: 6px 10px; min-height: 40px; }

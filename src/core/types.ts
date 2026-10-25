@@ -46,6 +46,16 @@ export interface ApprovalRequest {
   decidedAt?: string;
 }
 
+/** 事業の成果指標(売上・会員数など)。 */
+export interface Kpi {
+  id: string;
+  name: string;
+  unit: string;
+  target: number | null;
+  current: number | null;
+  updatedAt: string;
+}
+
 /** 事業。複数のプロジェクトをまとめ、既定のチームと月予算を持つ。 */
 export interface Business {
   id: string;
@@ -55,6 +65,10 @@ export interface Business {
   team: RoleId[];
   /** 事業全体の月予算(USD)。null は上限なし。 */
   monthlyBudgetUsd: number | null;
+  /** 事業の成果指標。値は人間が入力する。 */
+  kpis: Kpi[];
+  /** アーカイブした日時。アーカイブ中は一覧に出さず、新しいプロジェクトも作れない。 */
+  archivedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -52,10 +52,10 @@ HOST=0.0.0.0 DASHBOARD_TOKEN=長いランダムな文字列 npm start
 | `PORT` / `HOST` | `8787` / `127.0.0.1` | 待ち受けアドレス |
 | `DASHBOARD_TOKEN` | 起動ごとにランダム | ダッシュボードのログイントークン |
 | `PROVIDER` | (役割ごと) | `mock` にすると全役割をモックで動かす |
-| `CLAUDE_MODEL` | `claude-sonnet-5-5` | Claude Code が使うモデル(役割定義の `model` が優先) |
+| `CLAUDE_MODEL` | `claude-opus-5-5` | Claude Code が使うモデル(役割定義の `model` が優先) |
 | `MAX_PARALLEL` | `2` | 同時に動かすタスク数 |
 | `MAX_ATTEMPTS` | `3` | 人間に判断を仰ぐまでの修正回数 |
-| `MAX_REVIEWERS` | `1` | 1タスクあたりのレビュー担当の上限 |
+| `MAX_REVIEWERS` | `2` | 1タスクあたりのレビュー担当の上限 |
 | `COMMAND_PROVIDERS` | なし | CLI型エージェントの追加(下記) |
 | `DATA_DIR` / `WORKSPACE_DIR` | `data/` / `workspaces/` | 状態の保存先 / 成果物の作業場所 |
 
@@ -76,7 +76,7 @@ CLI型ではツール単位の承認を挟めないため、CLI側のサンド�
 
 AIを呼び出すたびに、作業ログに費用と累計が記録されます。費用を左右するのは主に次の4つです。
 
-- モデル: 既定は Sonnet 5.5。役割ごとに `src/roles/catalog.ts` の `model` で変更できます。
+- モデル: 既定は Opus 5.5(品質優先)。役割ごとに `src/roles/catalog.ts` の `model` で Sonnet などに変更できます。
 - 思考レベル(effort): 既定は `medium`。役割ごとに `effort` で変更できます。
 - レビュー担当の人数(`MAX_REVIEWERS`)と修正回数の上限(`MAX_ATTEMPTS`)
 - プロジェクトの予算と事業の月予算: 達すると止まり、続行するかどうかを人間に確認します。

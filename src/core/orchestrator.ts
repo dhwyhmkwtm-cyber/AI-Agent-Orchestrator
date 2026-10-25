@@ -13,7 +13,7 @@ import {
   roleSystemPrompt,
 } from './prompts.ts';
 import { monthKey, newId, now, type Store } from './store.ts';
-import type { ApprovalCategory, ApprovalRequest, Attempt, Business, Project, Review, RoleDefinition, Task } from './types.ts';
+import type { ApprovalCategory, ApprovalRequest, Attempt, Business, Kpi, Project, Review, RoleDefinition, Task } from './types.ts';
 
 export interface OrchestratorOptions {
   store: Store;
@@ -41,11 +41,22 @@ export interface CreateProjectInput {
   budgetUsd?: number;
 }
 
+export interface KpiInput {
+  /** 既存のKPIを更新するときに指定する。 */
+  id?: string;
+  name: string;
+  unit?: string;
+  target?: number | null;
+  current?: number | null;
+}
+
 export interface BusinessInput {
   name: string;
   description?: string;
   team?: string[];
   monthlyBudgetUsd?: number | null;
+  /** 指定するとKPIの一覧をこの内容で置き換える。 */
+  kpis?: KpiInput[];
 }
 
 const REQUIRED_ROLES = ['director', 'qa_reviewer'];
@@ -80,7 +91,7 @@ export class Orchestrator {
     this.approvals = opts.approvals;
     this.maxAttempts = opts.maxAttempts ?? 3;
     this.maxParallel = opts.maxParallel ?? 2;
-    this.maxReviewers = Math.max(1, opts.maxReviewers ?? 1);
+    this.maxReviewers = Math.max(1, opts.maxReviewers ?? 2);
     this.passScore = opts.passScore ?? 70;
     this.approvals.onDecided((a) => this.onDecided(a));
   }
@@ -101,6 +112,7 @@ export class Orchestrator {
       description: '',
       team: [...REQUIRED_ROLES],
       monthlyBudgetUsd: null,
+      kpis: [],
       createdAt: now(),
       updatedAt: now(),
     };
@@ -126,6 +138,63 @@ export class Orchestrator {
     business.description = input.description?.trim() ?? '';
     business.team = this.resolveTeam(input.team?.length ? input.team : this.roles.map((r) => r.id));
     business.monthlyBudgetUsd = budget ?? null;
+    if (input.kpis) business.kpis = input.kpis.map((k) => this.toKpi(k, business.kpis));
+  }
+
+  private toKpi(input: KpiInput, existing: Kpi[]): Kpi {
+    if (!input.name?.trim()) throw new Error('KPI name is required');
+    const num = (v: number | null | undefined, field: string): number | null => {
+      if (v === null || v === undefined) return null;
+      if (!Number.isFinite(v)) throw new Error(`KPI ${field} must be a number`);
+      return v;
+    };
+    const prev = existing.find((k) => k.id === input.id);
+    const kpi: Kpi = {
+      id: prev?.id ?? newId(),
+      name: input.name.trim(),
+      unit: input.unit?.trim() ?? '',
+      target: num(input.target, 'target'),
+      current: num(input.current, 'current'),
+      updatedAt: prev?.updatedAt ?? now(),
+    };
+    if (!prev || prev.current !== kpi.current || prev.target !== kpi.target) kpi.updatedAt = now();
+    return kpi;
+  }
+
+  /** アーカイブ中の事業は一覧に出さず、新しいプロジェクトも作れない。進行中のプロジェクトはそのまま続く。 */
+  setBusinessArchived(id: string, archived: boolean): Business {
+    const business = this.business(id);
+    business.archivedAt = archived ? now() : undefined;
+    business.updatedAt = now();
+    this.store.changed();
+    return business;
+  }
+
+  /** プロジェクトが1つもない事業だけ削除できる。プロジェクトがある事業はアーカイブする。 */
+  deleteBusiness(id: string): void {
+    const business = this.business(id);
+    const count = this.store.state.projects.filter((p) => p.businessId === id).length;
+    if (count) throw new Error(`事業「${business.name}」にはプロジェクトが${count}件あるため削除できません。アーカイブしてください`);
+    this.store.state.businesses = this.store.state.businesses.filter((b) => b.id !== id);
+    this.store.changed();
+  }
+
+  /** プロジェクトを別の事業へ移す。businessId が null なら事業なしにする。費用の集計も一緒に移る。 */
+  moveProject(projectId: string, businessId: string | null): Project {
+    const project = this.project(projectId);
+    const to = businessId ? this.business(businessId) : undefined;
+    if (to?.archivedAt) throw new Error(`事業「${to.name}」はアーカイブ中です`);
+    const from = this.store.state.businesses.find((b) => b.id === project.businessId);
+    project.businessId = to?.id;
+    project.updatedAt = now();
+    this.store.log({
+      projectId: project.id,
+      agent: 'human',
+      kind: 'info',
+      message: `事業を移動: ${from?.name ?? '事業なし'} → ${to?.name ?? '事業なし'}`,
+    });
+    this.store.changed();
+    return project;
   }
 
   /** 事業の今月の費用。 */
@@ -138,6 +207,7 @@ export class Orchestrator {
   createProject(input: CreateProjectInput): Project {
     if (!input.name?.trim() || !input.goal?.trim()) throw new Error('name and goal are required');
     const business = input.businessId ? this.business(input.businessId) : undefined;
+    if (business?.archivedAt) throw new Error(`事業「${business.name}」はアーカイブ中です`);
     const requested = input.team?.length ? input.team : business?.team ?? this.roles.map((r) => r.id);
     const budget = input.budgetUsd ?? 10;
     if (!(budget > 0)) throw new Error('budgetUsd must be positive');

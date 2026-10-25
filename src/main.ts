@@ -28,7 +28,7 @@ const orchestrator = new Orchestrator({
   providerOverride: override,
   maxParallel: Number(process.env.MAX_PARALLEL ?? 2),
   maxAttempts: Number(process.env.MAX_ATTEMPTS ?? 3),
-  maxReviewers: Number(process.env.MAX_REVIEWERS ?? 1),
+  maxReviewers: Number(process.env.MAX_REVIEWERS ?? 2),
 });
 
 const server = createDashboardServer({

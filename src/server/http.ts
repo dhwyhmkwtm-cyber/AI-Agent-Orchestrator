@@ -71,6 +71,16 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   }
 }
 
+/** 処理を実行し、失敗を HTTP エラーにする(見つからない対象は 404)。 */
+function attempt<T>(fn: () => T, status = 400): T {
+  try {
+    return fn();
+  } catch (err) {
+    const message = (err as Error).message;
+    throw new HttpError(/not found/.test(message) ? 404 : status, message);
+  }
+}
+
 /** リクエストの本文から、指定された項目だけを事業の入力にする。 */
 function businessInput(body: Record<string, unknown>): Partial<BusinessInput> {
   const input: Partial<BusinessInput> = {};
@@ -79,6 +89,19 @@ function businessInput(body: Record<string, unknown>): Partial<BusinessInput> {
   if (Array.isArray(body.team)) input.team = body.team.map(String);
   if (body.monthlyBudgetUsd !== undefined) {
     input.monthlyBudgetUsd = body.monthlyBudgetUsd === null || body.monthlyBudgetUsd === '' ? null : Number(body.monthlyBudgetUsd);
+  }
+  if (Array.isArray(body.kpis)) {
+    const num = (v: unknown) => (v === null || v === undefined || v === '' ? null : Number(v));
+    input.kpis = body.kpis.map((raw) => {
+      const k = (raw ?? {}) as Record<string, unknown>;
+      return {
+        id: k.id ? String(k.id) : undefined,
+        name: String(k.name ?? ''),
+        unit: k.unit === undefined ? undefined : String(k.unit),
+        target: num(k.target),
+        current: num(k.current),
+      };
+    });
   }
   return input;
 }
@@ -111,7 +134,10 @@ function listFiles(root: string, dir = root, out: Array<{ path: string; size: nu
  * - GET  /api/events?projectId=…   作業ログ
  * - GET  /api/stream               状態変化とログのSSE
  * - POST /api/businesses           事業の作成 {name, description?, team?, monthlyBudgetUsd?}
- * - POST /api/businesses/:id       事業の更新(同じ項目、指定したものだけ)
+ * - POST /api/businesses/:id       事業の更新(同じ項目+kpis、指定したものだけ)
+ * - POST /api/businesses/:id/archive  アーカイブ {archived: boolean}
+ * - DELETE /api/businesses/:id     事業の削除(プロジェクトがない場合のみ)
+ * - POST /api/projects/:id/move    プロジェクトの事業を変更 {businessId: string | null}
  * - POST /api/projects             プロジェクト作成 {name, goal, businessId?, team?, budgetUsd?}
  * - POST /api/projects/:id/retry   失敗したプロジェクトの再開
  * - POST /api/approvals/:id        承認・却下 {approve: boolean, comment?}
@@ -193,11 +219,26 @@ export function createDashboardServer(opts: ServerOptions): Server {
     let m = /^\/api\/businesses\/([\w-]+)$/.exec(pathname);
     if (method === 'POST' && m) {
       const input = businessInput(await readJson(req));
-      try {
-        return json(res, 200, orchestrator.updateBusiness(m[1], input));
-      } catch (err) {
-        throw new HttpError((err as Error).message.startsWith('business not found') ? 404 : 400, (err as Error).message);
-      }
+      return json(res, 200, attempt(() => orchestrator.updateBusiness(m![1], input)));
+    }
+    if (method === 'DELETE' && m) {
+      attempt(() => orchestrator.deleteBusiness(m![1]), 409);
+      return json(res, 200, { ok: true });
+    }
+
+    m = /^\/api\/businesses\/([\w-]+)\/archive$/.exec(pathname);
+    if (method === 'POST' && m) {
+      const body = await readJson(req);
+      if (typeof body.archived !== 'boolean') throw new HttpError(400, 'archived must be boolean');
+      return json(res, 200, attempt(() => orchestrator.setBusinessArchived(m![1], body.archived as boolean)));
+    }
+
+    m = /^\/api\/projects\/([\w-]+)\/move$/.exec(pathname);
+    if (method === 'POST' && m) {
+      const body = await readJson(req);
+      const businessId = body.businessId === null || body.businessId === '' ? null : String(body.businessId ?? '');
+      if (body.businessId === undefined) throw new HttpError(400, 'businessId is required (null for none)');
+      return json(res, 200, attempt(() => orchestrator.moveProject(m![1], businessId)));
     }
 
     m = /^\/api\/projects\/([\w-]+)\/retry$/.exec(pathname);

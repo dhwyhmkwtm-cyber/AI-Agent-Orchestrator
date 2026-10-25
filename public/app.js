@@ -43,7 +43,7 @@ const APPROVAL_HINT = {
   tool: '承認するとエージェントがこの操作を実行します。',
 };
 
-const ui = { state: null, events: [], files: null, filesSig: '', selected: localGet('selectedProject') };
+const ui = { state: null, events: [], files: null, filesSig: '', selected: localGet('selectedProject'), showArchived: false };
 
 function localGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function localSet(k, v) { try { localStorage.setItem(k, v); } catch { /* 保存できなくても動く */ } }
@@ -66,6 +66,9 @@ const roleName = (id) => ui.state?.roles.find((r) => r.id === id)?.name ?? id;
 const chip = ([label, cls]) => h('span', { class: `chip ${cls}` }, label);
 const time = (iso) => new Date(iso).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
 const usd = (n) => `$${n.toFixed(2)}`;
+const num = (n) => (n === null || n === undefined ? '—' : n.toLocaleString('ja-JP'));
+const date = (iso) => new Date(iso).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' });
+const openBusinesses = () => ui.state.businesses.filter((b) => !b.archivedAt);
 const businessOf = (p) => ui.state.businesses.find((b) => b.id === p?.businessId);
 const projectMonthSpend = (p) => p.spendByMonth?.[ui.state.month] ?? 0;
 const ACTIVE = new Set(['planning', 'awaiting_plan_approval', 'running', 'paused']);
@@ -103,7 +106,10 @@ function renderApprovals(s) {
 
   const box = $('approvals');
   // 入力中のコメントを消さないよう、内容が変わったときだけ描き直す
-  const sig = pending.map((a) => a.id).join(',');
+  const sig = pending.map((a) => {
+    const p = s.projects.find((x) => x.id === a.projectId);
+    return `${a.id}:${businessOf(p)?.name ?? ''}`;
+  }).join(',');
   if (box.dataset.sig === sig) return;
   box.dataset.sig = sig;
   box.replaceChildren(
@@ -155,7 +161,23 @@ function renderProjects(s) {
   };
   $('projects').replaceChildren(...groupByBusiness([...s.projects].reverse())
     .filter((g) => g.projects.length)
-    .flatMap((g) => [h('h3', { class: 'group-title' }, g.business?.name ?? '事業なし'), ...g.projects.map(card)]));
+    .flatMap((g) => [h('h3', { class: 'group-title' }, g.business ? `${g.business.name}${g.business.archivedAt ? '(アーカイブ中)' : ''}` : '事業なし'), ...g.projects.map(card)]));
+}
+
+function kpiView(k) {
+  const ratio = k.target ? k.current / k.target : null;
+  return h('div', { class: 'kpi' },
+    h('div', { class: 'row' },
+      h('span', {}, k.name),
+      h('span', { class: 'value' }, `${num(k.current)}${k.unit}`, k.target !== null && h('span', { class: 'meta' }, ` / 目標 ${num(k.target)}${k.unit}`))),
+    k.target ? budgetBarPlain(ratio) : null,
+    h('div', { class: 'meta' }, `${ratio !== null && k.current !== null ? `達成率 ${Math.round(ratio * 100)}% ・ ` : ''}更新 ${date(k.updatedAt)}`));
+}
+
+function budgetBarPlain(ratio) {
+  const bar = h('span');
+  bar.style.width = `${Math.max(0, Math.min(ratio ?? 0, 1)) * 100}%`;
+  return h('div', { class: 'budget' }, bar);
 }
 
 function renderOverview(s, box) {
@@ -163,25 +185,28 @@ function renderOverview(s, box) {
   const monthTotal = s.projects.reduce((sum, p) => sum + projectMonthSpend(p), 0);
   const stat = (label, value) => h('div', { class: 'card' }, h('div', { class: 'meta' }, label), h('div', { class: 'stat' }, value));
   const summary = h('div', { class: 'summary' },
-    stat('事業', s.businesses.length),
+    stat('事業', openBusinesses().length),
     stat('進行中のプロジェクト', s.projects.filter((p) => ACTIVE.has(p.status)).length),
     stat('承認待ち', pending.length),
     stat(`今月の費用 (${s.month})`, usd(monthTotal)),
   );
 
-  const cards = groupByBusiness(s.projects).map(({ business: b, projects }) => {
+  const archivedCount = s.businesses.filter((b) => b.archivedAt).length;
+  const groups = groupByBusiness(s.projects).filter((g) => ui.showArchived || !g.business?.archivedAt);
+  const cards = groups.map(({ business: b, projects }) => {
     const count = (st) => projects.filter((p) => st.includes(p.status)).length;
     const approvalsHere = pending.filter((a) => projects.some((p) => p.id === a.projectId)).length;
     const spent = projects.reduce((sum, p) => sum + projectMonthSpend(p), 0);
     const ordered = [...projects].sort((x, y) => Number(ACTIVE.has(y.status)) - Number(ACTIVE.has(x.status)) || y.updatedAt.localeCompare(x.updatedAt));
-    return h('div', { class: 'card stack' },
+    return h('div', { class: `card stack${b?.archivedAt ? ' archived' : ''}` },
       h('div', { class: 'row between' },
         h('h2', {}, b?.name ?? '事業なし'),
-        approvalsHere > 0 && h('span', { class: 'badge hot' }, `承認待ち ${approvalsHere}`)),
+        b?.archivedAt ? chip(['アーカイブ中', '']) : approvalsHere > 0 && h('span', { class: 'badge hot' }, `承認待ち ${approvalsHere}`)),
       b?.description && h('div', { class: 'meta pre' }, b.description),
       h('div', {},
         h('div', { class: 'meta' }, b?.monthlyBudgetUsd ? `今月 ${usd(spent)} / 月予算 ${usd(b.monthlyBudgetUsd)}` : `今月 ${usd(spent)}${b ? '(月予算なし)' : ''}`),
         b?.monthlyBudgetUsd && budgetBar(spent, b.monthlyBudgetUsd)),
+      b?.kpis.length > 0 && h('div', { class: 'kpis' }, ...b.kpis.map(kpiView)),
       h('div', { class: 'counts' },
         chip([`進行中 ${count(['planning', 'running'])}`, 'run']),
         chip([`承認待ち・停止 ${count(['awaiting_plan_approval', 'paused'])}`, 'warn']),
@@ -191,14 +216,23 @@ function renderOverview(s, box) {
         ? h('div', { class: 'plist' }, ...ordered.slice(0, 6).map((p) => h('button', { onclick: () => select(p.id) }, h('span', {}, p.name), chip(PROJECT_STATUS[p.status]))),
             ordered.length > 6 && h('div', { class: 'meta' }, `ほか ${ordered.length - 6} 件(左の一覧から選べます)`))
         : h('p', { class: 'empty' }, 'プロジェクトはまだありません'),
-      b && h('div', { class: 'row end' },
+      b && !b.archivedAt && h('div', { class: 'row end' },
+        h('button', { class: 'btn', onclick: () => archiveBusiness(b, true) }, 'アーカイブ'),
         h('button', { class: 'btn', onclick: () => openBusiness(b) }, '編集'),
         h('button', { class: 'btn primary', onclick: () => openNewProject(b.id) }, '＋ プロジェクト')),
+      b?.archivedAt && h('div', { class: 'row end' },
+        projects.length
+          ? h('span', { class: 'meta' }, 'プロジェクトがあるため削除できません')
+          : h('button', { class: 'btn bad', onclick: () => deleteBusiness(b) }, '削除'),
+        h('button', { class: 'btn', onclick: () => archiveBusiness(b, false) }, '元に戻す')),
     );
   });
+  const archivedToggle = archivedCount > 0 && h('div', { class: 'row end' },
+    h('button', { class: 'btn', onclick: () => { ui.showArchived = !ui.showArchived; render(); } },
+      ui.showArchived ? 'アーカイブ済みを隠す' : `アーカイブ済みの事業を表示 (${archivedCount})`));
 
   box.replaceChildren(summary,
-    cards.length ? h('div', { class: 'businesses' }, ...cards)
+    cards.length ? h('div', { class: 'stack' }, h('div', { class: 'businesses' }, ...cards), archivedToggle)
       : h('div', { class: 'card stack' },
           h('p', {}, '事業を作ると、プロジェクトを事業ごとにまとめて、進み具合・承認待ち・今月の費用を一覧できます。'),
           h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: () => openBusiness() }, '＋ 最初の事業を作る'))));
@@ -214,9 +248,9 @@ function renderDetail(s) {
   const openDetails = new Set([...box.querySelectorAll('details[open]')].map((d) => d.dataset.key));
   const tasks = s.tasks.filter((t) => t.projectId === p.id);
   const header = h('div', { class: 'card stack' },
-    h('div', { class: 'row' },
+    h('div', { class: 'row between' },
       h('button', { class: 'btn', onclick: () => select(null) }, '← 全体'),
-      h('span', { class: 'meta' }, businessOf(p)?.name ?? '事業なし')),
+      moveSelect(p)),
     h('div', { class: 'row between' }, h('h2', {}, p.name), chip(PROJECT_STATUS[p.status])),
     h('div', { class: 'pre' }, p.goal),
     h('div', { class: 'meta' }, `チーム: ${p.team.map(roleName).join('、')}`),
@@ -245,6 +279,31 @@ function renderDetail(s) {
   } else {
     showFiles(p.id);
   }
+}
+
+function moveSelect(p) {
+  const current = businessOf(p);
+  const options = [
+    h('option', { value: '', selected: !current }, '事業なし'),
+    ...ui.state.businesses
+      .filter((b) => !b.archivedAt || b.id === current?.id)
+      .map((b) => h('option', { value: b.id, selected: b.id === current?.id }, b.name + (b.archivedAt ? '(アーカイブ中)' : ''))),
+  ];
+  const sel = h('select', { 'aria-label': '事業' }, ...options);
+  sel.onchange = async () => {
+    const to = ui.state.businesses.find((b) => b.id === sel.value);
+    if (!confirm(`「${p.name}」を「${to?.name ?? '事業なし'}」へ移しますか?費用の集計も一緒に移ります。`)) {
+      sel.value = current?.id ?? '';
+      return;
+    }
+    try {
+      await api(`/api/projects/${p.id}/move`, { method: 'POST', body: JSON.stringify({ businessId: sel.value || null }) });
+    } catch (e) {
+      alert(e.message);
+      sel.value = current?.id ?? '';
+    }
+  };
+  return h('label', { class: 'move meta' }, '事業:', sel);
 }
 
 function taskCard(t, all, openDetails) {
@@ -371,7 +430,7 @@ function openNewProject(businessId) {
   const select = $('projectBusiness');
   const current = typeof businessId === 'string' ? businessId : businessOf(ui.state.projects.find((p) => p.id === ui.selected))?.id ?? '';
   select.replaceChildren(h('option', { value: '' }, '事業なし'),
-    ...ui.state.businesses.map((b) => h('option', { value: b.id, selected: b.id === current }, b.name)));
+    ...openBusinesses().map((b) => h('option', { value: b.id, selected: b.id === current }, b.name)));
   const applyTeam = () => {
     const b = ui.state.businesses.find((x) => x.id === select.value);
     teamCheckboxes($('teamChoices'), b ? b.team : ui.state.roles.map((r) => r.id));
@@ -391,8 +450,49 @@ function openBusiness(b) {
   form.elements.monthlyBudgetUsd.value = b?.monthlyBudgetUsd ?? '';
   $('businessDialogTitle').textContent = b ? '事業の編集' : '新規事業';
   teamCheckboxes($('businessTeamChoices'), b ? b.team : ui.state.roles.map((r) => r.id));
+  $('kpiRows').replaceChildren(...(b?.kpis ?? []).map(kpiRow));
   $('businessError').hidden = true;
   $('businessDialog').showModal();
+}
+
+function kpiRow(k = {}) {
+  const field = (label, name, attrs) => h('label', {}, label, h('input', { name, value: k[name] ?? '', ...attrs }));
+  const row = h('div', { class: 'kpi-row', 'data-id': k.id ?? '' },
+    field('指標名', 'kname', { value: k.name ?? '', placeholder: '例: 月間売上', maxlength: 60 }),
+    field('現在値', 'current', { type: 'number', step: 'any' }),
+    field('目標', 'target', { type: 'number', step: 'any' }),
+    field('単位', 'unit', { placeholder: '円', maxlength: 10 }),
+  );
+  row.append(h('button', { type: 'button', class: 'btn', 'aria-label': 'このKPIを削除', onclick: () => row.remove() }, '×'));
+  return row;
+}
+
+function readKpis() {
+  return [...$('kpiRows').children].map((row) => {
+    const v = (n) => row.querySelector(`[name=${n}]`).value;
+    const n = (x) => (x === '' ? null : Number(x));
+    return { id: row.dataset.id || undefined, name: v('kname'), unit: v('unit'), current: n(v('current')), target: n(v('target')) };
+  }).filter((k) => k.name.trim() || k.current !== null || k.target !== null);
+}
+
+async function archiveBusiness(b, archived) {
+  if (archived && !confirm(`「${b.name}」をアーカイブしますか?一覧から隠れ、新しいプロジェクトは作れなくなります(進行中のプロジェクトは続きます)。いつでも元に戻せます。`)) return;
+  try {
+    await api(`/api/businesses/${b.id}/archive`, { method: 'POST', body: JSON.stringify({ archived }) });
+    await refresh();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+async function deleteBusiness(b) {
+  if (!confirm(`「${b.name}」を削除しますか?この操作は元に戻せません。`)) return;
+  try {
+    await api(`/api/businesses/${b.id}`, { method: 'DELETE' });
+    await refresh();
+  } catch (e) {
+    alert(e.message);
+  }
 }
 
 async function submitBusiness(ev) {
@@ -405,6 +505,7 @@ async function submitBusiness(ev) {
     description: form.elements.description.value,
     monthlyBudgetUsd: budget === '' ? null : Number(budget),
     team: [...form.querySelectorAll('input[name=team]:checked')].map((i) => i.value),
+    kpis: readKpis(),
   };
   try {
     await api(id ? `/api/businesses/${id}` : '/api/businesses', { method: 'POST', body: JSON.stringify(body) });
@@ -444,6 +545,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('newBusinessBtn').addEventListener('click', () => openBusiness());
   $('businessForm').addEventListener('submit', submitBusiness);
   $('overviewBtn').addEventListener('click', () => select(null));
+  $('addKpiBtn').addEventListener('click', () => $('kpiRows').append(kpiRow()));
   for (const btn of document.querySelectorAll('[data-close]')) {
     btn.addEventListener('click', () => btn.closest('dialog').close());
   }

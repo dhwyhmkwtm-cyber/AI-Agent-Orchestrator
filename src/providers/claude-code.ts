@@ -2,8 +2,8 @@ import { query, type CanUseTool } from '@anthropic-ai/claude-agent-sdk';
 import { assessToolUse } from '../policy/risk.ts';
 import type { AgentProvider, AgentRunRequest, AgentRunResult } from './types.ts';
 
-// 既定は費用を抑えた Sonnet。高い判断力が要る役割だけ、役割定義の model で上位モデルに上げる。
-export const DEFAULT_MODEL = 'claude-sonnet-5-5';
+// 品質を優先して Opus を既定にする。費用を抑えたい役割は、役割定義の model で Sonnet などに下げる。
+export const DEFAULT_MODEL = 'claude-opus-5-5';
 export const DEFAULT_EFFORT = 'medium';
 
 /** ツール入力をログ用に短くまとめる。 */

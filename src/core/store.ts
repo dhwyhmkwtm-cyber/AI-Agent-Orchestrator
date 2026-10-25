@@ -34,6 +34,7 @@ export class Store extends EventEmitter {
       Object.assign(this.state, JSON.parse(readFileSync(this.statePath, 'utf8')));
       // 古い形式の state.json からの移行
       for (const p of this.state.projects) p.spendByMonth ??= {};
+      for (const b of this.state.businesses) b.kpis ??= [];
     }
     if (existsSync(this.eventsPath)) {
       const lines = readFileSync(this.eventsPath, 'utf8').trim().split('\n').filter(Boolean);

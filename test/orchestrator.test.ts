@@ -10,7 +10,7 @@ import { MockProvider, demoHandler, type MockHandler } from '../src/providers/mo
 import { ProviderRegistry } from '../src/providers/registry.ts';
 import { DEFAULT_ROLES } from '../src/roles/catalog.ts';
 
-function setup(handler: MockHandler = demoHandler, opts: { maxAttempts?: number } = {}) {
+function setup(handler: MockHandler = demoHandler, opts: { maxAttempts?: number; maxReviewers?: number } = {}) {
   const store = new Store();
   const approvals = new Approvals(store);
   const providers = new ProviderRegistry().register(new MockProvider(handler));
@@ -170,7 +170,7 @@ test('レビュー担当は上限の人数までに絞られる', async () => {
       rationale: 'r',
       tasks: [{ key: 'a', title: 'A', description: 'd', role: 'researcher', dependsOn: [], reviewers: ['qa_reviewer', 'director'], approval: { required: false, category: 'decision', reason: '' } }],
     };
-  });
+  }, { maxReviewers: 1 });
   orchestrator.createProject({ name: 'p', goal: 'g' });
   await waitFor(() => !!pendingOf(approvals, 'plan'), 'plan');
   assert.deepEqual(store.state.tasks[0].reviewers, ['qa_reviewer']);
@@ -216,4 +216,47 @@ test('事業の更新では指定した項目だけが変わる', () => {
   assert.equal(biz.description, 'd');
   assert.throws(() => orchestrator.updateBusiness(biz.id, { name: ' ' }), /name is required/);
   assert.throws(() => orchestrator.createBusiness({ name: 'x', monthlyBudgetUsd: -1 }), /positive/);
+});
+
+test('事業のアーカイブ・削除・プロジェクトの移動', () => {
+  const { store, orchestrator } = setup();
+  const a = orchestrator.createBusiness({ name: 'A' });
+  const b = orchestrator.createBusiness({ name: 'B' });
+  const p = orchestrator.createProject({ name: 'p', goal: 'g', businessId: a.id });
+  p.spendByMonth['2026-10'] = 1.5;
+
+  assert.throws(() => orchestrator.deleteBusiness(a.id), /アーカイブしてください/);
+  orchestrator.moveProject(p.id, b.id);
+  assert.equal(p.businessId, b.id);
+  assert.equal(orchestrator.businessMonthSpend(b.id, '2026-10'), 1.5, '費用の集計も移る');
+  assert.equal(orchestrator.businessMonthSpend(a.id, '2026-10'), 0);
+  orchestrator.deleteBusiness(a.id);
+  assert.deepEqual(store.state.businesses.map((x) => x.id), [b.id]);
+
+  orchestrator.setBusinessArchived(b.id, true);
+  assert.throws(() => orchestrator.createProject({ name: 'q', goal: 'g', businessId: b.id }), /アーカイブ中/);
+  orchestrator.moveProject(p.id, null);
+  assert.equal(p.businessId, undefined);
+  assert.throws(() => orchestrator.moveProject(p.id, b.id), /アーカイブ中/);
+  orchestrator.setBusinessArchived(b.id, false);
+  orchestrator.moveProject(p.id, b.id);
+  assert.equal(p.businessId, b.id);
+});
+
+test('KPIは一覧ごと置き換わり、値が変わったものだけ更新日時が変わる', async () => {
+  const { orchestrator } = setup();
+  const biz = orchestrator.createBusiness({ name: 'b', kpis: [{ name: '月間売上', unit: '円', target: 1000000, current: 250000 }, { name: '会員数', unit: '人' }] });
+  assert.equal(biz.kpis.length, 2);
+  const [sales, members] = biz.kpis;
+  assert.equal(members.target, null);
+  await new Promise((r) => setTimeout(r, 5));
+  orchestrator.updateBusiness(biz.id, { kpis: [{ ...sales, current: 300000 }, { ...members }] });
+  assert.equal(biz.kpis[0].id, sales.id);
+  assert.equal(biz.kpis[0].current, 300000);
+  assert.notEqual(biz.kpis[0].updatedAt, sales.updatedAt);
+  assert.equal(biz.kpis[1].updatedAt, members.updatedAt);
+  orchestrator.updateBusiness(biz.id, { kpis: [] });
+  assert.equal(biz.kpis.length, 0);
+  assert.throws(() => orchestrator.updateBusiness(biz.id, { kpis: [{ name: ' ' }] }), /KPI name is required/);
+  assert.throws(() => orchestrator.updateBusiness(biz.id, { kpis: [{ name: 'x', current: NaN }] }), /must be a number/);
 });
