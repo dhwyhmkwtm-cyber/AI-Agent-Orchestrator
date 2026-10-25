@@ -6,7 +6,8 @@
     "start": "tsx src/main.ts",
     "demo": "PROVIDER=mock tsx src/main.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts",
+    "smoke": "tsx scripts/smoke.ts"
   },
   "repository": {
     "type": "git",
