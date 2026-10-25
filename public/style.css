@@ -170,3 +170,9 @@ select { appearance: auto; }
 .card.archived { opacity: .75; border-style: dashed; }
 .move { display: flex; gap: .5rem; align-items: center; }
 .move select { width: auto; max-width: 100%; padding: 6px 10px; min-height: 40px; }
+
+.roles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.roles ul { margin: .2rem 0; padding-left: 1.2rem; font-size: .92rem; }
+.choices select { padding: 8px; }
+.fields3 { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.fields3 select { margin-top: 4px; }

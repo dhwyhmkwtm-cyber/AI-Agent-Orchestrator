@@ -13,6 +13,7 @@
   <header class="topbar">
     <h1><button id="overviewBtn" class="linklike">AI Agent Orchestrator</button></h1>
     <span id="conn" class="conn" title="接続状態">●</span>
+    <button id="rolesBtn" class="btn">役割</button>
     <button id="newBusinessBtn" class="btn">＋ 事業</button>
     <button id="newProjectBtn" class="btn primary">＋ プロジェクト</button>
   </header>
@@ -78,6 +79,37 @@
       <div class="row end">
         <button type="button" class="btn" data-close>キャンセル</button>
         <button type="submit" class="btn primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="roleDialog" class="dialog">
+    <form id="roleForm" method="dialog">
+      <h2 id="roleDialogTitle">役割の編集</h2>
+      <input type="hidden" name="id">
+      <label>名前<input name="name" required maxlength="40"></label>
+      <label>使命(何をする役割か)<textarea name="mission" required rows="3"></textarea></label>
+      <label>判断基準(1行に1つ。作業時の自己チェックとレビューの採点基準になります)<textarea name="criteria" required rows="6"></textarea></label>
+      <div class="fields3">
+        <label>AIサービス<select name="provider"></select></label>
+        <label>モデル<select name="model"></select></label>
+        <label>思考レベル<select name="effort"></select></label>
+      </div>
+      <fieldset>
+        <legend>使ってよいツール</legend>
+        <div id="roleToolChoices" class="choices"></div>
+        <p class="meta">「ファイルを作る」がない役割はレビュー専任になり、作業の担当にはなりません。</p>
+      </fieldset>
+      <p id="roleError" class="error" hidden></p>
+      <div class="row between">
+        <div class="row">
+          <button type="button" id="roleDeleteBtn" class="btn bad">削除</button>
+          <button type="button" id="roleResetBtn" class="btn">初期値に戻す</button>
+        </div>
+        <div class="row">
+          <button type="button" class="btn" data-close>キャンセル</button>
+          <button type="submit" class="btn primary">保存</button>
+        </div>
       </div>
     </form>
   </dialog>

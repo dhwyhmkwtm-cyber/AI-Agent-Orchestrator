@@ -3,13 +3,17 @@ import { createReadStream, existsSync, readdirSync, readFileSync, realpathSync, 
 import { extname, join, relative, resolve, sep } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import type { Approvals } from '../core/approvals.ts';
-import type { BusinessInput, Orchestrator } from '../core/orchestrator.ts';
+import type { BusinessInput, Orchestrator, RoleInput } from '../core/orchestrator.ts';
+import { EFFORT_CHOICES, MODEL_CHOICES, TOOL_CHOICES } from '../roles/catalog.ts';
+import { DEFAULT_MODEL } from '../providers/claude-code.ts';
 import { monthKey, type Store } from '../core/store.ts';
 
 export interface ServerOptions {
   store: Store;
   approvals: Approvals;
   orchestrator: Orchestrator;
+  /** 役割の担当に選べるAIサービスのID。 */
+  providerIds: string[];
   publicDir: string;
   workspaceRoot: string;
   /** ダッシュボードのログイントークン。 */
@@ -81,6 +85,26 @@ function attempt<T>(fn: () => T, status = 400): T {
   }
 }
 
+/** 「既定」の選択肢に、実際に使われるモデル名を添える。 */
+function modelChoices(): typeof MODEL_CHOICES {
+  const id = process.env.CLAUDE_MODEL || DEFAULT_MODEL;
+  const name = MODEL_CHOICES.find((m) => m.id === id)?.label.replace(/\(.*\)$/, '') ?? id;
+  return MODEL_CHOICES.map((m) => (m.id === '' ? { ...m, label: `既定(${name})` } : m));
+}
+
+function roleInput(body: Record<string, unknown>): RoleInput {
+  const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : []);
+  return {
+    name: String(body.name ?? ''),
+    mission: String(body.mission ?? ''),
+    criteria: list(body.criteria),
+    tools: list(body.tools),
+    provider: String(body.provider ?? ''),
+    model: body.model ? String(body.model) : undefined,
+    effort: body.effort ? (String(body.effort) as RoleInput['effort']) : undefined,
+  };
+}
+
 /** リクエストの本文から、指定された項目だけを事業の入力にする。 */
 function businessInput(body: Record<string, unknown>): Partial<BusinessInput> {
   const input: Partial<BusinessInput> = {};
@@ -138,6 +162,10 @@ function listFiles(root: string, dir = root, out: Array<{ path: string; size: nu
  * - POST /api/businesses/:id/archive  アーカイブ {archived: boolean}
  * - DELETE /api/businesses/:id     事業の削除(プロジェクトがない場合のみ)
  * - POST /api/projects/:id/move    プロジェクトの事業を変更 {businessId: string | null}
+ * - POST /api/roles                役割の追加 {name, mission, criteria[], tools[], provider, model?, effort?}
+ * - POST /api/roles/:id            役割の更新(同じ項目すべて)
+ * - POST /api/roles/:id/reset      標準の役割を初期値に戻す
+ * - DELETE /api/roles/:id          追加した役割の削除(どのチームにも入っていない場合のみ)
  * - POST /api/projects             プロジェクト作成 {name, goal, businessId?, team?, budgetUsd?}
  * - POST /api/projects/:id/retry   失敗したプロジェクトの再開
  * - POST /api/approvals/:id        承認・却下 {approve: boolean, comment?}
@@ -171,7 +199,11 @@ export function createDashboardServer(opts: ServerOptions): Server {
     if (!authorized(req)) throw new HttpError(401, 'unauthorized');
 
     if (method === 'GET' && pathname === '/api/state') {
-      return json(res, 200, { ...store.state, roles: orchestrator.roles, month: monthKey() });
+      return json(res, 200, {
+        ...store.state,
+        month: monthKey(),
+        choices: { tools: TOOL_CHOICES, models: modelChoices(), efforts: EFFORT_CHOICES, providers: opts.providerIds },
+      });
     }
     if (method === 'GET' && pathname === '/api/events') {
       return json(res, 200, store.recentEvents(url.searchParams.get('projectId') ?? undefined));
@@ -231,6 +263,24 @@ export function createDashboardServer(opts: ServerOptions): Server {
       const body = await readJson(req);
       if (typeof body.archived !== 'boolean') throw new HttpError(400, 'archived must be boolean');
       return json(res, 200, attempt(() => orchestrator.setBusinessArchived(m![1], body.archived as boolean)));
+    }
+
+    if (method === 'POST' && pathname === '/api/roles') {
+      const input = roleInput(await readJson(req));
+      return json(res, 201, attempt(() => orchestrator.createRole(input)));
+    }
+    m = /^\/api\/roles\/([\w-]+)$/.exec(pathname);
+    if (method === 'POST' && m) {
+      const input = roleInput(await readJson(req));
+      return json(res, 200, attempt(() => orchestrator.updateRole(m![1], input)));
+    }
+    if (method === 'DELETE' && m) {
+      attempt(() => orchestrator.deleteRole(m![1]), 409);
+      return json(res, 200, { ok: true });
+    }
+    m = /^\/api\/roles\/([\w-]+)\/reset$/.exec(pathname);
+    if (method === 'POST' && m) {
+      return json(res, 200, attempt(() => orchestrator.resetRole(m![1]), 409));
     }
 
     m = /^\/api\/projects\/([\w-]+)\/move$/.exec(pathname);

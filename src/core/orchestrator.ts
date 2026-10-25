@@ -13,7 +13,8 @@ import {
   roleSystemPrompt,
 } from './prompts.ts';
 import { monthKey, newId, now, type Store } from './store.ts';
-import type { ApprovalCategory, ApprovalRequest, Attempt, Business, Kpi, Project, Review, RoleDefinition, Task } from './types.ts';
+import type { ApprovalCategory, ApprovalRequest, Attempt, Business, Effort, Kpi, Project, Review, RoleDefinition, Task } from './types.ts';
+import { EFFORT_CHOICES, MODEL_CHOICES, TOOL_CHOICES } from '../roles/catalog.ts';
 
 export interface OrchestratorOptions {
   store: Store;
@@ -39,6 +40,17 @@ export interface CreateProjectInput {
   /** 省略すると事業の既定チーム(事業もなければ全役割)を使う。 */
   team?: string[];
   budgetUsd?: number;
+}
+
+export interface RoleInput {
+  name: string;
+  mission: string;
+  criteria: string[];
+  tools: string[];
+  provider: string;
+  /** 空文字か省略で既定のモデル。 */
+  model?: string;
+  effort?: Effort | '';
 }
 
 export interface KpiInput {
@@ -93,11 +105,86 @@ export class Orchestrator {
     this.maxParallel = opts.maxParallel ?? 2;
     this.maxReviewers = Math.max(1, opts.maxReviewers ?? 2);
     this.passScore = opts.passScore ?? 70;
+    this.seedRoles();
     this.approvals.onDecided((a) => this.onDecided(a));
   }
 
+  /** 役割は state に保存され、画面から編集できる。opts.roles は標準の役割(初期値)。 */
   get roles(): RoleDefinition[] {
-    return this.opts.roles;
+    return this.store.state.roles;
+  }
+
+  /** 標準の役割のうち、まだ state にないものを加える(初回起動や、標準の役割が増えたとき)。 */
+  private seedRoles(): void {
+    let added = false;
+    for (const def of this.opts.roles) {
+      if (this.store.state.roles.some((r) => r.id === def.id)) continue;
+      this.store.state.roles.push({ ...structuredClone(def), builtin: true });
+      added = true;
+    }
+    if (added) this.store.changed();
+  }
+
+  createRole(input: RoleInput): RoleDefinition {
+    const role = { id: `custom_${newId()}` } as RoleDefinition;
+    this.applyRoleInput(role, input);
+    this.store.state.roles.push(role);
+    this.store.changed();
+    return role;
+  }
+
+  /** 実行中の作業には影響せず、次の作業から使われる。 */
+  updateRole(id: string, input: RoleInput): RoleDefinition {
+    const role = this.role(id);
+    this.applyRoleInput(role, input);
+    this.store.changed();
+    return role;
+  }
+
+  resetRole(id: string): RoleDefinition {
+    const role = this.role(id);
+    const def = this.opts.roles.find((r) => r.id === id);
+    if (!role.builtin || !def) throw new Error('追加した役割は初期値に戻せません');
+    for (const k of Object.keys(role)) delete (role as unknown as Record<string, unknown>)[k];
+    Object.assign(role, structuredClone(def), { builtin: true, updatedAt: now() });
+    this.store.changed();
+    return role;
+  }
+
+  /** 追加した役割で、どの事業・プロジェクトのチームにも入っていないものだけ削除できる。 */
+  deleteRole(id: string): void {
+    const role = this.role(id);
+    if (role.builtin) throw new Error('標準の役割は削除できません。初期値に戻すことはできます');
+    const users = [
+      ...this.store.state.businesses.filter((b) => b.team.includes(id)).map((b) => `事業「${b.name}」`),
+      ...this.store.state.projects.filter((p) => p.team.includes(id)).map((p) => `プロジェクト「${p.name}」`),
+    ];
+    if (users.length) throw new Error(`${users.slice(0, 3).join('、')}${users.length > 3 ? ` ほか${users.length - 3}件` : ''}のチームで使われているため削除できません`);
+    this.store.state.roles = this.store.state.roles.filter((r) => r.id !== id);
+    this.store.changed();
+  }
+
+  private applyRoleInput(role: RoleDefinition, input: RoleInput): void {
+    const name = input.name?.trim();
+    const mission = input.mission?.trim();
+    const criteria = (input.criteria ?? []).map((c) => c.trim()).filter(Boolean);
+    if (!name) throw new Error('名前を入力してください');
+    if (!mission) throw new Error('使命を入力してください');
+    if (!criteria.length) throw new Error('判断基準を1つ以上入力してください');
+    const knownTools = new Set(TOOL_CHOICES.map((t) => t.id));
+    const badTool = input.tools.find((t) => !knownTools.has(t));
+    if (badTool) throw new Error(`使えないツールです: ${badTool}`);
+    if (!this.opts.providers.ids().includes(input.provider)) throw new Error(`登録されていないAIサービスです: ${input.provider}`);
+    if (input.model && !MODEL_CHOICES.some((m) => m.id === input.model)) throw new Error(`選べないモデルです: ${input.model}`);
+    if (input.effort && !EFFORT_CHOICES.includes(input.effort)) throw new Error(`選べない思考レベルです: ${input.effort}`);
+    role.name = name;
+    role.mission = mission;
+    role.criteria = criteria;
+    role.tools = [...new Set(input.tools)];
+    role.provider = input.provider;
+    role.model = input.model || undefined;
+    role.effort = input.effort || undefined;
+    role.updatedAt = now();
   }
 
   /** すべてのバックグラウンド処理が終わるまで待つ(テスト用)。 */

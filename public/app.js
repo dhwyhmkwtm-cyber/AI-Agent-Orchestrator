@@ -43,7 +43,8 @@ const APPROVAL_HINT = {
   tool: '承認するとエージェントがこの操作を実行します。',
 };
 
-const ui = { state: null, events: [], files: null, filesSig: '', selected: localGet('selectedProject'), showArchived: false };
+const ui = { state: null, events: [], files: null, filesSig: '', selected: localGet('selectedProject'), showArchived: false, page: null };
+const EFFORT_LABEL = { low: '低', medium: '中', high: '高', xhigh: 'とても高い', max: '最大' };
 
 function localGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function localSet(k, v) { try { localStorage.setItem(k, v); } catch { /* 保存できなくても動く */ } }
@@ -164,6 +165,37 @@ function renderProjects(s) {
     .flatMap((g) => [h('h3', { class: 'group-title' }, g.business ? `${g.business.name}${g.business.archivedAt ? '(アーカイブ中)' : ''}` : '事業なし'), ...g.projects.map(card)]));
 }
 
+function renderRoles(s, box) {
+  const modelLabel = (id) => s.choices.models.find((m) => m.id === (id ?? ''))?.label ?? id;
+  const toolLabel = (id) => s.choices.tools.find((t) => t.id === id)?.label ?? id;
+  const cards = s.roles.map((r) => {
+    const inBiz = s.businesses.filter((b) => b.team.includes(r.id)).length;
+    const inProj = s.projects.filter((p) => p.team.includes(r.id)).length;
+    return h('div', { class: 'card stack' },
+      h('div', { class: 'row between' }, h('h2', {}, r.name), chip(r.builtin ? ['標準', ''] : ['追加', 'run'])),
+      h('div', {}, r.mission),
+      h('div', {}, h('strong', {}, '判断基準'), h('ul', {}, ...r.criteria.map((c) => h('li', {}, c)))),
+      h('div', { class: 'counts' },
+        chip([modelLabel(r.model), '']),
+        chip([`思考: ${EFFORT_LABEL[r.effort ?? 'medium']}${r.effort ? '' : '(既定)'}`, '']),
+        chip([r.provider, '']),
+        !r.tools.includes('Write') && chip(['レビュー専任', 'warn'])),
+      h('div', { class: 'meta' }, `ツール: ${r.tools.map(toolLabel).join('、') || 'なし'}`),
+      h('div', { class: 'row between' },
+        h('span', { class: 'meta' }, `使用中: 事業 ${inBiz} ・ プロジェクト ${inProj}`),
+        h('button', { class: 'btn', onclick: () => openRole(r) }, '編集')),
+    );
+  });
+  box.replaceChildren(
+    h('div', { class: 'card stack' },
+      h('div', { class: 'row between' },
+        h('button', { class: 'btn', onclick: () => select(null) }, '← 全体'),
+        h('button', { class: 'btn primary', onclick: () => openRole() }, '＋ 役割を追加')),
+      h('h2', {}, '役割と判断基準'),
+      h('p', { class: 'meta' }, '変更は次の作業から反映されます(作業中のAIには影響しません)。外部公開・費用・危険なコマンドの承認ルールは、役割の設定に関係なく常に有効です。')),
+    h('div', { class: 'roles' }, ...cards));
+}
+
 function kpiView(k) {
   const ratio = k.target ? k.current / k.target : null;
   return h('div', { class: 'kpi' },
@@ -239,8 +271,12 @@ function renderOverview(s, box) {
 }
 
 function renderDetail(s) {
-  const p = s.projects.find((x) => x.id === ui.selected);
   const box = $('detail');
+  if (ui.page === 'roles') {
+    renderRoles(s, box);
+    return;
+  }
+  const p = s.projects.find((x) => x.id === ui.selected);
   if (!p) {
     renderOverview(s, box);
     return;
@@ -385,6 +421,7 @@ async function openFile(projectId, path) {
 
 /** id を null にすると全体画面に戻る。 */
 async function select(id) {
+  ui.page = null;
   ui.selected = id;
   localSet('selectedProject', id ?? '');
   ui.events = id ? await api(`/api/events?projectId=${id}`) : [];
@@ -495,6 +532,64 @@ async function deleteBusiness(b) {
   }
 }
 
+function showRoles() {
+  ui.page = 'roles';
+  render();
+  window.scrollTo({ top: 0 });
+}
+
+function fillSelect(sel, options, value) {
+  sel.replaceChildren(...options.map(([v, label]) => h('option', { value: v, selected: v === value }, label)));
+}
+
+function openRole(r) {
+  const c = ui.state.choices;
+  const form = $('roleForm');
+  form.reset();
+  form.elements.id.value = r?.id ?? '';
+  form.elements.name.value = r?.name ?? '';
+  form.elements.mission.value = r?.mission ?? '';
+  form.elements.criteria.value = (r?.criteria ?? []).join('\n');
+  fillSelect(form.elements.provider, c.providers.map((p) => [p, p]), r?.provider ?? 'claude-code');
+  fillSelect(form.elements.model, c.models.map((m) => [m.id, m.label]), r?.model ?? '');
+  fillSelect(form.elements.effort, [['', '既定(中)'], ...c.efforts.map((e) => [e, EFFORT_LABEL[e]])], r?.effort ?? '');
+  const tools = r?.tools ?? ['Read', 'Write', 'Edit', 'Glob', 'Grep'];
+  $('roleToolChoices').replaceChildren(...c.tools.map((t) =>
+    h('label', {}, h('input', { type: 'checkbox', name: 'tools', value: t.id, checked: tools.includes(t.id) }), t.label)));
+  $('roleDialogTitle').textContent = r ? `役割の編集: ${r.name}` : '役割の追加';
+  $('roleDeleteBtn').hidden = !r || r.builtin;
+  $('roleResetBtn').hidden = !r?.builtin;
+  $('roleError').hidden = true;
+  $('roleDialog').showModal();
+}
+
+async function roleAction(fn) {
+  try {
+    await fn();
+    $('roleDialog').close();
+    await refresh();
+  } catch (e) {
+    $('roleError').textContent = e.message;
+    $('roleError').hidden = false;
+  }
+}
+
+function submitRole(ev) {
+  ev.preventDefault();
+  const form = ev.target;
+  const id = form.elements.id.value;
+  const body = {
+    name: form.elements.name.value,
+    mission: form.elements.mission.value,
+    criteria: form.elements.criteria.value.split('\n'),
+    provider: form.elements.provider.value,
+    model: form.elements.model.value,
+    effort: form.elements.effort.value,
+    tools: [...form.querySelectorAll('input[name=tools]:checked')].map((i) => i.value),
+  };
+  roleAction(() => api(id ? `/api/roles/${id}` : '/api/roles', { method: 'POST', body: JSON.stringify(body) }));
+}
+
 async function submitBusiness(ev) {
   ev.preventDefault();
   const form = ev.target;
@@ -546,6 +641,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('businessForm').addEventListener('submit', submitBusiness);
   $('overviewBtn').addEventListener('click', () => select(null));
   $('addKpiBtn').addEventListener('click', () => $('kpiRows').append(kpiRow()));
+  $('rolesBtn').addEventListener('click', showRoles);
+  $('roleForm').addEventListener('submit', submitRole);
+  $('roleResetBtn').addEventListener('click', () => {
+    const id = $('roleForm').elements.id.value;
+    if (confirm('この役割を初期値に戻しますか?編集した内容は失われます。')) roleAction(() => api(`/api/roles/${id}/reset`, { method: 'POST' }));
+  });
+  $('roleDeleteBtn').addEventListener('click', () => {
+    const id = $('roleForm').elements.id.value;
+    if (confirm('この役割を削除しますか?')) roleAction(() => api(`/api/roles/${id}`, { method: 'DELETE' }));
+  });
   for (const btn of document.querySelectorAll('[data-close]')) {
     btn.addEventListener('click', () => btn.closest('dialog').close());
   }

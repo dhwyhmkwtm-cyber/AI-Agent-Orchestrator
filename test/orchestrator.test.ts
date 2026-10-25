@@ -260,3 +260,51 @@ test('KPIは一覧ごと置き換わり、値が変わったものだけ更新�
   assert.throws(() => orchestrator.updateBusiness(biz.id, { kpis: [{ name: ' ' }] }), /KPI name is required/);
   assert.throws(() => orchestrator.updateBusiness(biz.id, { kpis: [{ name: 'x', current: NaN }] }), /must be a number/);
 });
+
+test('役割は保存され、編集・追加・初期値に戻す・削除ができる', async () => {
+  const prompts: string[] = [];
+  const { store, approvals, orchestrator } = setup((req) => {
+    if (req.purpose === 'plan') prompts.push(req.systemPrompt);
+    return demoHandler(req);
+  });
+  assert.equal(store.state.roles.length, DEFAULT_ROLES.length);
+  assert.ok(store.state.roles.every((r) => r.builtin));
+
+  const director = orchestrator.roles.find((r) => r.id === 'director')!;
+  const edit = { name: '統括', mission: '新しい使命', criteria: ['基準A', ' ', '基準B'], tools: ['Read'], provider: 'mock', model: 'claude-sonnet-5-5', effort: 'low' as const };
+  orchestrator.updateRole('director', edit);
+  assert.deepEqual(director.criteria, ['基準A', '基準B'], '空行は捨てる');
+  assert.equal(director.model, 'claude-sonnet-5-5');
+
+  orchestrator.createProject({ name: 'p', goal: 'g' });
+  await waitFor(() => prompts.length === 1, 'plan');
+  assert.match(prompts[0], /新しい使命/, '編集した使命と判断基準が次の作業から使われる');
+  assert.match(prompts[0], /- 基準B/);
+
+  orchestrator.resetRole('director');
+  assert.equal(director.mission, DEFAULT_ROLES.find((r) => r.id === 'director')!.mission);
+  assert.equal(director.model, undefined);
+  assert.throws(() => orchestrator.deleteRole('director'), /削除できません/);
+
+  const sns = orchestrator.createRole({ name: 'SNS運用', mission: '投稿を作る', criteria: ['炎上しない'], tools: ['Read', 'Write'], provider: 'mock' });
+  assert.match(sns.id, /^custom_/);
+  assert.throws(() => orchestrator.resetRole(sns.id), /初期値に戻せません/);
+  const biz = orchestrator.createBusiness({ name: 'b', team: [sns.id] });
+  assert.throws(() => orchestrator.deleteRole(sns.id), /事業「b」/);
+  orchestrator.updateBusiness(biz.id, { team: ['researcher'] });
+  orchestrator.deleteRole(sns.id);
+  assert.equal(orchestrator.roles.some((r) => r.id === sns.id), false);
+  await orchestrator.idle();
+  void approvals;
+});
+
+test('役割の入力は検証される', () => {
+  const { orchestrator } = setup();
+  const ok = { name: 'x', mission: 'm', criteria: ['c'], tools: ['Read'], provider: 'mock' };
+  assert.throws(() => orchestrator.createRole({ ...ok, name: ' ' }), /名前/);
+  assert.throws(() => orchestrator.createRole({ ...ok, criteria: [' '] }), /判断基準/);
+  assert.throws(() => orchestrator.createRole({ ...ok, tools: ['Read', 'mcp__evil'] }), /使えないツール/);
+  assert.throws(() => orchestrator.createRole({ ...ok, provider: 'nope' }), /AIサービス/);
+  assert.throws(() => orchestrator.createRole({ ...ok, model: 'gpt-x' }), /モデル/);
+  assert.throws(() => orchestrator.createRole({ ...ok, effort: 'turbo' as never }), /思考レベル/);
+});

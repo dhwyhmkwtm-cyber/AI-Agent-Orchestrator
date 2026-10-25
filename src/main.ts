@@ -35,6 +35,7 @@ const server = createDashboardServer({
   store,
   approvals,
   orchestrator,
+  providerIds: registry.ids(),
   publicDir: join(root, 'public'),
   workspaceRoot,
   token,

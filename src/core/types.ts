@@ -14,8 +14,13 @@ export interface RoleDefinition {
   /** プロバイダに許可するツール。Claude Code では Options.tools に渡る。 */
   tools: string[];
   model?: string;
-  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  effort?: Effort;
+  /** 標準の役割。削除できず、初期値に戻せる。 */
+  builtin?: boolean;
+  updatedAt?: string;
 }
+
+export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 /** 人間の最終承認が必要な操作の種類。 */
 export type ApprovalCategory = 'decision' | 'publish' | 'cost';
@@ -175,6 +180,7 @@ export interface LogEvent {
 }
 
 export interface State {
+  roles: RoleDefinition[];
   businesses: Business[];
   projects: Project[];
   tasks: Task[];

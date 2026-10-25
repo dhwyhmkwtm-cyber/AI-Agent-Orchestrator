@@ -3,6 +3,28 @@ import type { RoleDefinition } from '../core/types.ts';
 // 専門AIの標準ロスター。provider を書き換えれば役割単位で別のAIサービスに差し替えられる。
 // director(計画)と qa_reviewer(品質検証)はオーケストレータが必ず使う。
 
+/** 画面から役割に割り当てられるツール。ここにないツールは使わせない。 */
+export const TOOL_CHOICES: Array<{ id: string; label: string }> = [
+  { id: 'Read', label: 'ファイルを読む' },
+  { id: 'Glob', label: 'ファイルを探す' },
+  { id: 'Grep', label: 'ファイル内を検索' },
+  { id: 'Write', label: 'ファイルを作る' },
+  { id: 'Edit', label: 'ファイルを編集' },
+  { id: 'Bash', label: 'コマンド実行(危険な操作は承認制)' },
+  { id: 'WebSearch', label: 'Web検索' },
+  { id: 'WebFetch', label: 'Webページを読む' },
+];
+
+/** 画面から選べるモデル。空文字は既定(CLAUDE_MODEL)を使う。 */
+export const MODEL_CHOICES: Array<{ id: string; label: string }> = [
+  { id: '', label: '既定' },
+  { id: 'claude-opus-5-5', label: 'Opus 5.5(高品質)' },
+  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5(バランス)' },
+  { id: 'claude-haiku-5-5', label: 'Haiku 5.5(軽量・低コスト)' },
+];
+
+export const EFFORT_CHOICES = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+
 const READ_ONLY = ['Read', 'Glob', 'Grep'];
 const WRITE = ['Read', 'Write', 'Edit', 'Glob', 'Grep'];
 const WEB = ['WebSearch', 'WebFetch'];
