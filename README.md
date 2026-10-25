@@ -1,1 +1,3 @@
-# AI-Agent-Orchestrator
+# AI Agent Orchestrator
+
+複数のAIエージェントを連携させ、タスクを効率的に管理・実行するためのオーケストレーションツールです。
