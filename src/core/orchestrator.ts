@@ -26,6 +26,8 @@ export interface OrchestratorOptions {
   /** 人間に判断を仰ぐまでの、実行+レビューの最大試行回数。 */
   maxAttempts?: number;
   maxParallel?: number;
+  /** 1タスクあたりのレビュー担当の上限。レビュー1人ごとに費用がかかる。 */
+  maxReviewers?: number;
   /** レビュー合格に必要な点数。 */
   passScore?: number;
 }
@@ -61,6 +63,7 @@ export class Orchestrator {
   private readonly inflight = new Map<string, AbortController>();
   private readonly maxAttempts: number;
   private readonly maxParallel: number;
+  private readonly maxReviewers: number;
   private readonly passScore: number;
 
   constructor(private readonly opts: OrchestratorOptions) {
@@ -68,6 +71,7 @@ export class Orchestrator {
     this.approvals = opts.approvals;
     this.maxAttempts = opts.maxAttempts ?? 3;
     this.maxParallel = opts.maxParallel ?? 2;
+    this.maxReviewers = Math.max(1, opts.maxReviewers ?? 1);
     this.passScore = opts.passScore ?? 70;
     this.approvals.onDecided((a) => this.onDecided(a));
   }
@@ -168,7 +172,7 @@ export class Orchestrator {
     let error: string | undefined;
     for (let i = 0; i <= PLAN_RETRIES; i++) {
       if (!this.ensureBudget(project)) return;
-      const output = (await this.call('plan', project, undefined, director, planPrompt(project, team, error), PLAN_SCHEMA)) as {
+      const output = (await this.call('plan', project, undefined, director, planPrompt(project, team, this.maxReviewers, error), PLAN_SCHEMA)) as {
         rationale: string;
         tasks: PlannedTask[];
       };
@@ -186,7 +190,7 @@ export class Orchestrator {
   private installPlan(project: Project, rationale: string, planned: PlannedTask[]): void {
     this.store.state.tasks = this.store.state.tasks.filter((t) => t.projectId !== project.id);
     for (const p of planned) {
-      let reviewers = [...new Set(p.reviewers)].filter((r) => r !== p.role);
+      let reviewers = [...new Set(p.reviewers)].filter((r) => r !== p.role).slice(0, this.maxReviewers);
       if (!reviewers.length) reviewers = [p.role === 'qa_reviewer' ? 'director' : 'qa_reviewer'];
       this.store.state.tasks.push({
         id: newId(),
@@ -386,6 +390,13 @@ export class Orchestrator {
     };
     const result = await provider.run(req);
     project.spentUsd += result.costUsd;
+    this.store.log({
+      projectId: project.id,
+      taskId: task?.id,
+      agent: role.id,
+      kind: 'info',
+      message: `費用 $${result.costUsd.toFixed(3)} (${purpose}) / 累計 $${project.spentUsd.toFixed(3)}`,
+    });
     if (task) task.attempts.at(-1)!.costUsd += result.costUsd;
     this.store.changed();
     return result.output;

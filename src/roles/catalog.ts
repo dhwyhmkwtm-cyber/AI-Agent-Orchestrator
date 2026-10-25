@@ -21,7 +21,6 @@ export const DEFAULT_ROLES: RoleDefinition[] = [
     ],
     provider: 'claude-code',
     tools: [...READ_ONLY, ...WEB],
-    effort: 'high',
   },
   {
     id: 'researcher',

@@ -1,7 +1,7 @@
 // 実際のプロバイダで小さなプロジェクトを1つ流し、結果を表示する動作確認用スクリプト。
 // 計画と「意思決定」の承認ゲートは自動承認し、外部公開・費用・危険なツール操作・品質未達は自動で却下する。
 //
-//   npx tsx scripts/smoke.ts [予算USD]
+//   npm run smoke -- <予算USD>   (実際にAPI費用がかかるため、予算の指定は必須)
 
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,7 +12,11 @@ import { Store } from '../src/core/store.ts';
 import { createRegistryFromEnv } from '../src/providers/registry.ts';
 import { DEFAULT_ROLES } from '../src/roles/catalog.ts';
 
-const budgetUsd = Number(process.argv[2] ?? 3);
+const budgetUsd = Number(process.argv[2]);
+if (!(budgetUsd > 0)) {
+  console.error('予算(USD)を指定してください。例: npm run smoke -- 1');
+  process.exit(2);
+}
 const base = mkdtempSync(join(tmpdir(), 'orchestrator-smoke-'));
 const store = new Store(join(base, 'data'));
 const approvals = new Approvals(store);

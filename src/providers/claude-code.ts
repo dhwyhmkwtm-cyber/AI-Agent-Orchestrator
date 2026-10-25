@@ -2,7 +2,9 @@ import { query, type CanUseTool } from '@anthropic-ai/claude-agent-sdk';
 import { assessToolUse } from '../policy/risk.ts';
 import type { AgentProvider, AgentRunRequest, AgentRunResult } from './types.ts';
 
-export const DEFAULT_MODEL = 'claude-opus-5-5';
+// 既定は費用を抑えた Sonnet。高い判断力が要る役割だけ、役割定義の model で上位モデルに上げる。
+export const DEFAULT_MODEL = 'claude-sonnet-5-5';
+export const DEFAULT_EFFORT = 'medium';
 
 /** ツール入力をログ用に短くまとめる。 */
 function describeToolInput(name: string, input: Record<string, unknown>): string {
@@ -49,7 +51,7 @@ export class ClaudeCodeProvider implements AgentProvider {
       options: {
         cwd: req.cwd,
         model: req.role.model ?? this.defaultModel,
-        effort: req.role.effort ?? 'high',
+        effort: req.role.effort ?? DEFAULT_EFFORT,
         systemPrompt: { type: 'preset', preset: 'claude_code', append: req.systemPrompt },
         tools: req.role.tools,
         outputFormat: { type: 'json_schema', schema: req.outputSchema },

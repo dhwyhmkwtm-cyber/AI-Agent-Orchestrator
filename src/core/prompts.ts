@@ -91,7 +91,7 @@ export function roleSystemPrompt(role: RoleDefinition): string {
   ].join('\n');
 }
 
-export function planPrompt(project: Project, team: RoleDefinition[], error?: string): string {
+export function planPrompt(project: Project, team: RoleDefinition[], maxReviewers: number, error?: string): string {
   return [
     `# プロジェクト: ${project.name}`,
     `目的: ${project.goal}`,
@@ -102,6 +102,7 @@ export function planPrompt(project: Project, team: RoleDefinition[], error?: str
     '## 指示',
     '目的を達成するための作業計画を立ててください。',
     '- tasks[].role と reviewers には上の役割IDだけを使う。reviewers に担当自身を含めない。',
+    `- reviewers は1タスクにつき最大${maxReviewers}人。成果物の領域に最も詳しい役割を選ぶ(レビュー1人ごとに費用がかかる)。`,
     '- 「ファイル保存不可」の役割はタスクの担当にせず、レビュアーとしてだけ使う。',
     '- dependsOn には先に完了している必要があるタスクの key を書く。',
     '- 外部公開・費用が発生する操作・重要な意思決定を含むタスクは approval.required を true にする。',

@@ -162,3 +162,16 @@ test('validatePlan は不正な計画を検出する', () => {
   assert.match(validatePlan([t('a', 'director')], team)!, /ファイルを保存できません/);
   assert.match(validatePlan([t('a', 'qa_reviewer')], team)!, /ファイルを保存できません/);
 });
+
+test('レビュー担当は上限の人数までに絞られる', async () => {
+  const { store, approvals, orchestrator } = setup((req) => {
+    if (req.purpose !== 'plan') return demoHandler(req);
+    return {
+      rationale: 'r',
+      tasks: [{ key: 'a', title: 'A', description: 'd', role: 'researcher', dependsOn: [], reviewers: ['qa_reviewer', 'director'], approval: { required: false, category: 'decision', reason: '' } }],
+    };
+  });
+  orchestrator.createProject({ name: 'p', goal: 'g' });
+  await waitFor(() => !!pendingOf(approvals, 'plan'), 'plan');
+  assert.deepEqual(store.state.tasks[0].reviewers, ['qa_reviewer']);
+});
